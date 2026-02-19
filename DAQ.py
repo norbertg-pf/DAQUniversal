@@ -27,6 +27,11 @@ import collections
 import time
 from pathlib import Path
 import traceback
+from itertools import islice
+
+plt.rcParams["path.simplify"] = True
+plt.rcParams["path.simplify_threshold"] = 1.0
+plt.rcParams["agg.path.chunksize"] = 10000
 
 ALL_AI_CHANNELS = [f"AI{i}" for i in range(32)]
 ALL_AO_CHANNELS = [f"AO{i}" for i in range(4)]
@@ -693,6 +698,7 @@ class DAQControlApp(QWidget):
         
         self.plot_lines = {}
         self.needs_plot_rebuild = True
+        self.last_rendered_history_samples = -1
         self.latest_math_values = {}
         self.active_math_signals = set()
 
@@ -1409,6 +1415,8 @@ class DAQControlApp(QWidget):
             self.history_time.clear()
             for sig in self.available_signals:
                 self.history_data[sig].clear()
+            self.history_samples = 0
+        self.last_rendered_history_samples = -1
                 
         self.needs_plot_rebuild = True
         
@@ -1724,6 +1732,7 @@ class DAQControlApp(QWidget):
                     self.history_time.extend(avg_t)
                     for i, sig in enumerate(self.available_signals):
                         self.history_data[sig].extend(avg_data[i, :] * scales.get(sig, 1.0))
+                    self.history_samples += len(avg_t)
 
                 rem_data = big_data[:, valid_len:]
                 rem_t = big_t[valid_len:]
@@ -1758,6 +1767,9 @@ class DAQControlApp(QWidget):
             ind.update_display(val, units.get(raw_sig, "V"), raw_sig)
         self.active_math_signals = math_sigs
 
+        if self.history_samples == self.last_rendered_history_samples and not self.needs_plot_rebuild:
+            return
+
         try: window_s = float(self.plot_window_input.text())
         except ValueError: window_s = 10.0
         try:
@@ -1774,20 +1786,29 @@ class DAQControlApp(QWidget):
                 required_signals.add(sig)
 
         with self.history_lock:
-            if len(self.history_time) == 0: return
-            
-            if num_points > 0 and len(self.history_time) > num_points:
-                t_plot = list(collections.deque(self.history_time, maxlen=num_points))
-                y_plots = {sig: list(collections.deque(self.history_data[sig], maxlen=num_points)) for sig in required_signals}
-            else:
-                t_plot = list(self.history_time)
-                y_plots = {sig: list(self.history_data[sig]) for sig in required_signals}
+            total_points = len(self.history_time)
+            if total_points == 0:
+                return
+
+            points_to_take = min(num_points, total_points) if num_points > 0 else total_points
+            start_idx = total_points - points_to_take
+
+            t_source = islice(self.history_time, start_idx, total_points)
+            t_full = np.fromiter(t_source, dtype=np.float64, count=points_to_take)
+
+            y_full = {}
+            for sig in required_signals:
+                sig_source = islice(self.history_data[sig], start_idx, total_points)
+                y_full[sig] = np.fromiter(sig_source, dtype=np.float64, count=points_to_take)
+
+            self.last_rendered_history_samples = self.history_samples
 
         # FAST VISUAL DECIMATION FILTER FOR MATPLOTLIB
         MAX_VISUAL_POINTS = 1500 
-        step = max(1, len(t_plot) // MAX_VISUAL_POINTS)
-        
-        t_arr = np.array(t_plot)[::step]
+        step = max(1, len(t_full) // MAX_VISUAL_POINTS)
+
+        t_arr = t_full[::step]
+        y_plots = {sig: values[::step] for sig, values in y_full.items()}
 
         if self.needs_plot_rebuild:
             self.figure.clear()
@@ -1810,7 +1831,7 @@ class DAQControlApp(QWidget):
                         c_name = custom_names.get(raw_sig, raw_sig)
                         plot_units.add(unit)
                         
-                        line, = ax.plot([], [], label=f"{c_name} [{unit}]")
+                        line, = ax.plot([], [], label=f"{c_name} [{unit}]", antialiased=False)
                         self.plot_lines[i][raw_sig] = line
                     
                     if plot_units: 
@@ -1831,13 +1852,21 @@ class DAQControlApp(QWidget):
             selected_raw_signals = self.subplot_widgets[i].get_selected_signals()
             for raw_sig in selected_raw_signals:
                 if raw_sig in self.plot_lines[i] and raw_sig in y_plots:
-                    y_arr = np.array(y_plots[raw_sig])[::step]
+                    y_arr = y_plots[raw_sig]
                     self.plot_lines[i][raw_sig].set_data(t_arr, y_arr)
             
             if len(t_arr) > 1:
                 ax.set_xlim(left=t_arr[0], right=t_arr[-1])
-                ax.relim()
-                ax.autoscale_view(scalex=False, scaley=True)
+                visible_ys = [y_plots[s] for s in selected_raw_signals if s in y_plots and len(y_plots[s]) > 0]
+                if visible_ys:
+                    y_min = min(np.min(arr) for arr in visible_ys)
+                    y_max = max(np.max(arr) for arr in visible_ys)
+                    if np.isfinite(y_min) and np.isfinite(y_max):
+                        if y_min == y_max:
+                            margin = max(1e-6, abs(y_min) * 0.05)
+                        else:
+                            margin = (y_max - y_min) * 0.05
+                        ax.set_ylim(y_min - margin, y_max + margin)
             elif len(t_arr) == 1:
                 ax.set_xlim(left=max(0, t_arr[0]-1), right=t_arr[0]+1)
 
@@ -1942,6 +1971,8 @@ class DAQControlApp(QWidget):
             self.history_time.clear()
             for sig in self.available_signals:
                 self.history_data[sig].clear()
+            self.history_samples = 0
+        self.last_rendered_history_samples = -1
 
         self.write_active_label.setStyleSheet("color: grey; font-weight: bold;")
         self.shutdown_label.setText("Status: OK")
