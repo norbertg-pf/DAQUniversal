@@ -1,0 +1,368 @@
+{
+    "main": {
+        "device": "Dev1",
+        "write_rate": "1000",
+        "read_rate": "1000",
+        "avg_samples": "10",
+        "plot_window": "10",
+        "threshold": "0.0002",
+        "dmm_ip": "169.254.169.37",
+        "simulate": true,
+        "output_folder": "C:/Users/norbertg/Desktop/2025/Proxima/Cave_measurements/data",
+        "available_signals": [
+            "AI0",
+            "AI1",
+            "AI2",
+            "AO0"
+        ]
+    },
+    "master_channels": {
+        "AI0": {
+            "custom_name": "Voltage",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI1": {
+            "custom_name": "Current",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "A",
+            "offset": "0.0"
+        },
+        "AI2": {
+            "custom_name": "Thermocouple",
+            "term": "DIFF",
+            "range": "-0.2 to 0.2",
+            "sensor": "Type K",
+            "scale": "1.0",
+            "unit": "\u00b0C",
+            "offset": "0.0"
+        },
+        "AI3": {
+            "custom_name": "AI3",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI4": {
+            "custom_name": "AI4",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI5": {
+            "custom_name": "AI5",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI6": {
+            "custom_name": "AI6",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI7": {
+            "custom_name": "AI7",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI8": {
+            "custom_name": "AI8",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI9": {
+            "custom_name": "AI9",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI10": {
+            "custom_name": "AI10",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI11": {
+            "custom_name": "AI11",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI12": {
+            "custom_name": "AI12",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI13": {
+            "custom_name": "AI13",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI14": {
+            "custom_name": "AI14",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI15": {
+            "custom_name": "AI15",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI16": {
+            "custom_name": "AI16",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI17": {
+            "custom_name": "AI17",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI18": {
+            "custom_name": "AI18",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI19": {
+            "custom_name": "AI19",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI20": {
+            "custom_name": "AI20",
+            "term": "NRSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI21": {
+            "custom_name": "AI21",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI22": {
+            "custom_name": "AI22",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI23": {
+            "custom_name": "AI23",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI24": {
+            "custom_name": "AI24",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI25": {
+            "custom_name": "AI25",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI26": {
+            "custom_name": "AI26",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI27": {
+            "custom_name": "AI27",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI28": {
+            "custom_name": "AI28",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI29": {
+            "custom_name": "AI29",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI30": {
+            "custom_name": "AI30",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AI31": {
+            "custom_name": "AI31",
+            "term": "RSE",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AO0": {
+            "custom_name": "AO0",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AO1": {
+            "custom_name": "AO1",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AO2": {
+            "custom_name": "AO2",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "AO3": {
+            "custom_name": "AO3",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        },
+        "DMM": {
+            "custom_name": "DMM",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0"
+        }
+    },
+    "subplots": [
+        [
+            "AI2"
+        ],
+        [
+            "AI1"
+        ]
+    ],
+    "indicators": [
+        {
+            "signal": "AI0",
+            "type": "RMS"
+        }
+    ]
+}
