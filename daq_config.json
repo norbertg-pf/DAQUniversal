@@ -2,13 +2,15 @@
     "main": {
         "device": "Dev1",
         "write_rate": "1000",
-        "read_rate": "1000",
-        "avg_samples": "10",
-        "plot_window": "10",
+        "read_rate": "10000",
+        "avg_samples": "100",
+        "plot_window": "20",
         "threshold": "0.0002",
         "dmm_ip": "169.254.169.37",
-        "simulate": true,
-        "output_folder": "C:/Users/norbertg/Desktop/2025/Proxima/Cave_measurements/data",
+        "gdrive_link": "https://drive.google.com/drive/folders/1wXNcNlbTbLoHEGo_XQiLff-Wwwj3EYGo?usp=drive_link",
+        "gdrive_auth": "OAuth 2.0 (User Login)",
+        "simulate": false,
+        "output_folder": "C:/Users/norbertg/Desktop/2026/DAQUniversal/data",
         "available_signals": [
             "AI0",
             "AI1",
@@ -354,15 +356,12 @@
     "subplots": [
         [
             "AI2"
-        ],
-        [
-            "AI1"
         ]
     ],
     "indicators": [
         {
-            "signal": "AI0",
-            "type": "RMS"
+            "signal": "AI2",
+            "type": "Peak-to-Peak"
         }
     ]
 }
