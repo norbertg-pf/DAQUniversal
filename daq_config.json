@@ -4,12 +4,12 @@
         "write_rate": "1000",
         "read_rate": "10000",
         "avg_samples": "100",
-        "plot_window": "20",
+        "plot_window": "10",
         "threshold": "0.0002",
         "dmm_ip": "169.254.169.37",
-        "gdrive_link": "https://drive.google.com/drive/folders/1wXNcNlbTbLoHEGo_XQiLff-Wwwj3EYGo?usp=drive_link",
+        "gdrive_link": "https://drive.google.com/drive/folders/1d2dbHBz7TNSmnjBX3YSR3hfUGzHbh6IV",
         "gdrive_auth": "OAuth 2.0 (User Login)",
-        "simulate": false,
+        "simulate": true,
         "output_folder": "C:/Users/norbertg/Desktop/2026/DAQUniversal/data",
         "available_signals": [
             "AI0",
@@ -20,31 +20,43 @@
     },
     "master_channels": {
         "AI0": {
+            "custom_name": "Current",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1000",
+            "unit": "A",
+            "offset": "0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
+        },
+        "AI1": {
             "custom_name": "Voltage",
             "term": "DIFF",
             "range": "-10 to 10",
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
-        },
-        "AI1": {
-            "custom_name": "Current",
-            "term": "DIFF",
-            "range": "-10 to 10",
-            "sensor": "None",
-            "scale": "1.0",
-            "unit": "A",
-            "offset": "0.0"
+            "offset": "0.000",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI2": {
             "custom_name": "Thermocouple",
             "term": "DIFF",
             "range": "-0.2 to 0.2",
             "sensor": "Type K",
-            "scale": "1.0",
+            "scale": "1",
             "unit": "\u00b0C",
-            "offset": "0.0"
+            "offset": "-273.16",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI3": {
             "custom_name": "AI3",
@@ -53,7 +65,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI4": {
             "custom_name": "AI4",
@@ -62,7 +78,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI5": {
             "custom_name": "AI5",
@@ -71,7 +91,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI6": {
             "custom_name": "AI6",
@@ -80,7 +104,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI7": {
             "custom_name": "AI7",
@@ -89,7 +117,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI8": {
             "custom_name": "AI8",
@@ -98,7 +130,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI9": {
             "custom_name": "AI9",
@@ -107,7 +143,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI10": {
             "custom_name": "AI10",
@@ -116,7 +156,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI11": {
             "custom_name": "AI11",
@@ -125,7 +169,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI12": {
             "custom_name": "AI12",
@@ -134,7 +182,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI13": {
             "custom_name": "AI13",
@@ -143,7 +195,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI14": {
             "custom_name": "AI14",
@@ -152,7 +208,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI15": {
             "custom_name": "AI15",
@@ -161,7 +221,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI16": {
             "custom_name": "AI16",
@@ -170,7 +234,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI17": {
             "custom_name": "AI17",
@@ -179,7 +247,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI18": {
             "custom_name": "AI18",
@@ -188,7 +260,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI19": {
             "custom_name": "AI19",
@@ -197,16 +273,24 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI20": {
             "custom_name": "AI20",
-            "term": "NRSE",
+            "term": "RSE",
             "range": "-10 to 10",
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI21": {
             "custom_name": "AI21",
@@ -215,7 +299,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI22": {
             "custom_name": "AI22",
@@ -224,7 +312,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI23": {
             "custom_name": "AI23",
@@ -233,7 +325,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI24": {
             "custom_name": "AI24",
@@ -242,7 +338,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI25": {
             "custom_name": "AI25",
@@ -251,7 +351,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI26": {
             "custom_name": "AI26",
@@ -260,7 +364,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI27": {
             "custom_name": "AI27",
@@ -269,7 +377,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI28": {
             "custom_name": "AI28",
@@ -278,7 +390,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI29": {
             "custom_name": "AI29",
@@ -287,7 +403,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI30": {
             "custom_name": "AI30",
@@ -296,7 +416,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AI31": {
             "custom_name": "AI31",
@@ -305,25 +429,37 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AO0": {
             "custom_name": "AO0",
-            "term": "DIFF",
-            "range": "-10 to 10",
-            "sensor": "None",
+            "term": "",
+            "range": "",
+            "sensor": "",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AO1": {
             "custom_name": "AO1",
-            "term": "DIFF",
-            "range": "-10 to 10",
-            "sensor": "None",
+            "term": "",
+            "range": "",
+            "sensor": "",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AO2": {
             "custom_name": "AO2",
@@ -332,7 +468,11 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "AO3": {
             "custom_name": "AO3",
@@ -341,7 +481,63 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
+        },
+        "MATH0": {
+            "custom_name": "MATH0",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 * AI1 "
+        },
+        "MATH1": {
+            "custom_name": "MATH1",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
+        },
+        "MATH2": {
+            "custom_name": "MATH2",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
+        },
+        "MATH3": {
+            "custom_name": "MATH3",
+            "term": "DIFF",
+            "range": "-10 to 10",
+            "sensor": "None",
+            "scale": "1.0",
+            "unit": "V",
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         },
         "DMM": {
             "custom_name": "DMM",
@@ -350,18 +546,41 @@
             "sensor": "None",
             "scale": "1.0",
             "unit": "V",
-            "offset": "0.0"
+            "offset": "0.0",
+            "lpf_on": false,
+            "lpf_cutoff": "10.0",
+            "lpf_order": "4",
+            "expression": "AI0 - AI1"
         }
+    },
+    "export_settings": {
+        "resample_rate": "100",
+        "gdrive_upload": true
     },
     "subplots": [
         [
             "AI2"
+        ],
+        [
+            "AI0",
+            "AI1"
+        ],
+        [
+            "MATH0"
         ]
     ],
     "indicators": [
         {
             "signal": "AI2",
-            "type": "Peak-to-Peak"
+            "type": "Current (100ms avg)"
+        },
+        {
+            "signal": "AI0",
+            "type": "Current (100ms avg)"
+        },
+        {
+            "signal": "AI1",
+            "type": "RMS"
         }
     ]
 }

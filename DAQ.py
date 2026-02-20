@@ -27,6 +27,7 @@ import time
 from pathlib import Path
 import traceback
 import re
+import scipy.signal as signal  # Added for Butterworth LPF
 
 # =============================================================================
 # GOOGLE DRIVE API IMPORTS (BOTH METHODS)
@@ -45,7 +46,8 @@ except ImportError:
 # Global Constants
 ALL_AI_CHANNELS = [f"AI{i}" for i in range(32)]
 ALL_AO_CHANNELS = [f"AO{i}" for i in range(4)]
-ALL_CHANNELS = ALL_AI_CHANNELS + ALL_AO_CHANNELS + ["DMM"]
+ALL_MATH_CHANNELS = [f"MATH{i}" for i in range(4)]
+ALL_CHANNELS = ALL_AI_CHANNELS + ALL_AO_CHANNELS + ALL_MATH_CHANNELS + ["DMM"]
 
 PLOT_COLORS = [(31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40), (148, 103, 189), (140, 86, 75)]
 
@@ -56,7 +58,7 @@ def get_terminal_name_with_dev_prefix(task: nidaqmx.Task, terminal_name: str) ->
     raise RuntimeError("Suitable device not found in task.")
 
 # =============================================================================
-# UI WIDGET: GOOGLE DRIVE HELP DIALOG
+# UI WIDGET: HELP DIALOGS
 # =============================================================================
 class GDriveHelpDialog(QDialog):
     def __init__(self, parent=None):
@@ -105,6 +107,40 @@ class GDriveHelpDialog(QDialog):
         scroll.setWidget(scroll_widget)
         
         layout.addWidget(scroll)
+        
+        close_btn = QPushButton("Close")
+        close_btn.setStyleSheet("font-weight: bold; padding: 6px;")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+
+class MathHelpDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Virtual Math Channels - Help")
+        self.setMinimumWidth(500)
+        layout = QVBoxLayout(self)
+        
+        text = """
+        <h3 style="color: #0055a4;">Using Virtual Math Channels</h3>
+        Math channels let you compute values in real-time using your active Analog Inputs.
+        <br><br>
+        <b>How to write expressions:</b><br>
+        Use the EXACT raw channel names (e.g., <b>AI0</b>, <b>AI5</b>, <b>DMM</b>) in your formula. Do NOT use your custom names.
+        <br><br>
+        <b>Examples:</b><br>
+        • Voltage Difference: <code>AI0 - AI1</code><br>
+        • Power (V * I): <code>AI0 * AI2</code><br>
+        • Scaling/Offset: <code>(AI3 * 100.0) + 5.5</code><br>
+        • NumPy Math: <code>np.sin(AI0)</code> or <code>np.abs(AI1)</code><br>
+        <br>
+        <i>Note: The math evaluates AFTER the individual channel's filtering, scaling, and offsets are applied!</i>
+        """
+        
+        lbl = QLabel(text)
+        lbl.setWordWrap(True)
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setStyleSheet("font-size: 13px; line-height: 1.5;")
+        layout.addWidget(lbl)
         
         close_btn = QPushButton("Close")
         close_btn.setStyleSheet("font-weight: bold; padding: 6px;")
@@ -430,6 +466,19 @@ class ChannelSelectionDialog(QDialog):
             c += 1
         ao_group.setLayout(ao_layout)
         layout.addWidget(ao_group)
+
+        # MATH CHANNELS ADDED HERE
+        math_group = QGroupBox("Virtual Math Channels")
+        math_layout = QGridLayout()
+        r, c = 0, 0
+        for sig in ALL_MATH_CHANNELS:
+            cb = QCheckBox(sig)
+            cb.setChecked(sig in active_signals)
+            self.checkboxes[sig] = cb
+            math_layout.addWidget(cb, r, c)
+            c += 1
+        math_group.setLayout(math_layout)
+        layout.addWidget(math_group)
         
         dmm_group = QGroupBox("External Devices")
         dmm_layout = QVBoxLayout()
@@ -450,18 +499,15 @@ class ChannelSelectionDialog(QDialog):
 
     def get_selected(self):
         selected = []
-        for sig in ALL_AI_CHANNELS:
-            if self.checkboxes[sig].isChecked(): selected.append(sig)
-        for sig in ALL_AO_CHANNELS:
-            if self.checkboxes[sig].isChecked(): selected.append(sig)
-        if self.checkboxes["DMM"].isChecked(): selected.append("DMM")
+        for sig in ALL_CHANNELS:
+            if sig in self.checkboxes and self.checkboxes[sig].isChecked(): selected.append(sig)
         return selected
 
 class ExportDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setWindowTitle("Export ASCII Data")
+        self.setWindowTitle("Export ASCII Data (Interactive)")
         self.setMinimumWidth(1000)
         self.setMinimumHeight(600)
         
@@ -469,10 +515,12 @@ class ExportDialog(QDialog):
         left_layout = QVBoxLayout()
         right_layout = QVBoxLayout()
         
+        exp_settings = self.parent.export_settings
+        
         grid = QGridLayout()
         timestamp = datetime.now().strftime("%H-%M-%S")
         self.filename_input = QLineEdit(f"export_{timestamp}")
-        self.resample_rate_input = QLineEdit("10") 
+        self.resample_rate_input = QLineEdit(exp_settings.get("resample_rate", "10")) 
         self.start_time_input = QLineEdit("0.00")
         self.end_time_input = QLineEdit("Max")
         
@@ -497,6 +545,8 @@ class ExportDialog(QDialog):
         row, col = 0, 0
         for sig in self.parent.available_signals:
             display_name = f"{name_map.get(sig, sig)} ({sig})"
+            if "MATH" in display_name.upper(): 
+                continue
             cb = QCheckBox(display_name)
             cb.setChecked(True)
             self.export_ch_cbs[sig] = cb
@@ -518,7 +568,7 @@ class ExportDialog(QDialog):
         left_layout.addWidget(ch_group)
         
         self.gdrive_cb = QCheckBox("Upload to Google Drive after export")
-        self.gdrive_cb.setChecked(True)
+        self.gdrive_cb.setChecked(exp_settings.get("gdrive_upload", True))
         if not GOOGLE_API_AVAILABLE:
             self.gdrive_cb.setEnabled(False)
             self.gdrive_cb.setText("Google API Missing (pip install google-api-python-client)")
@@ -611,6 +661,10 @@ class ExportDialog(QDialog):
             QMessageBox.critical(self, "Error", "Invalid numeric inputs.")
             return
 
+        self.parent.export_settings["resample_rate"] = self.resample_rate_input.text()
+        self.parent.export_settings["gdrive_upload"] = self.gdrive_cb.isChecked()
+        self.parent.save_config()
+
         export_name = f"{self.filename_input.text().strip()}.csv"
         
         date_str = datetime.now().strftime("%d_%m_%Y")
@@ -650,7 +704,7 @@ class ExportDialog(QDialog):
                 stack = [time_sliced[:valid_len].reshape(-1, factor).mean(axis=1)]
                 
                 for sig in self.parent.available_signals:
-                    if self.export_ch_cbs[sig].isChecked():
+                    if sig in self.export_ch_cbs and self.export_ch_cbs[sig].isChecked():
                         raw_v = group[sig][:][mask]
                         raw_v_sliced = raw_v[:valid_len].reshape(-1, factor).mean(axis=1)
                         
@@ -658,9 +712,10 @@ class ExportDialog(QDialog):
                             cfg = cfg_dict[sig]
                             custom_name = cfg["CustomName"]
                             unit = cfg["Unit"]
-                            scale = cfg["Scale"]
-                            offset = cfg["Offset"]
-                            val = (raw_v_sliced - offset) * scale
+                            scale = cfg.get("Scale", 1.0)
+                            offset = cfg.get("Offset", 0.0)
+                            # UPDATED MATH: (Raw * Scale) - Offset
+                            val = (raw_v_sliced * scale) - offset
                         else:
                             custom_name, unit, scale, offset = "DMM", "V", 1.0, 0.0
                             val = raw_v_sliced
@@ -696,7 +751,7 @@ class ExportDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"An error occurred:\n{e}")
             traceback.print_exc()
-        finally:
+            # Only re-enable the button if an error occurred and the window stays open
             self.export_btn.setText("Export to CSV")
             self.export_btn.setEnabled(True)
 
@@ -822,6 +877,7 @@ class DAQControlApp(QWidget):
         self.sample_nr = 0
         self.output_folder = r"\data"
         self.current_tdms_filepath = ""
+        self.export_settings = {}
         
         self.tdms_queue = queue.Queue(maxsize=1000) 
         self.process_queue = queue.Queue(maxsize=100)
@@ -883,7 +939,9 @@ class DAQControlApp(QWidget):
         term = "RSE" if raw_name.startswith("AI") and int(raw_name[2:]) >= 16 else "DIFF"
         return {
             "custom_name": raw_name, "term": term, "range": "-10 to 10",
-            "sensor": "None", "scale": "1.0", "unit": "V", "offset": "0.0"
+            "sensor": "None", "scale": "1.0", "unit": "V", "offset": "0.0",
+            "lpf_on": False, "lpf_cutoff": "10.0", "lpf_order": "4",
+            "expression": "AI0 - AI1"
         }
 
     def get_write_channel(self): return f"{self.device_cb.currentData()}/ao0"
@@ -983,10 +1041,10 @@ class DAQControlApp(QWidget):
         
         choose_folder_btn = QPushButton("Choose Output Folder")
         choose_folder_btn.clicked.connect(self.select_output_folder)
-        self.export_ascii_btn = QPushButton("Export ASCII Data (Interactive)")
+        self.export_ascii_btn = QPushButton("Export ASCII Data")
         self.export_ascii_btn.setStyleSheet("font-weight: bold; background-color: #0078D7; color: white;")
         self.export_ascii_btn.clicked.connect(self.open_export_dialog)
-        self.open_ao_btn = QPushButton("Open AnalogOut Control")
+        self.open_ao_btn = QPushButton("Open AnalogOut Control Pop-up")
         self.open_ao_btn.setStyleSheet("font-weight: bold; background-color: #ff9900; color: black;")
         self.open_ao_btn.clicked.connect(self.launch_analog_out)
         
@@ -1076,7 +1134,8 @@ class DAQControlApp(QWidget):
         if not new_device: return
         for ch in self.channel_ui_configs:
             raw_name = ch['name']
-            ch['ch_label'].setText(f"{new_device}/{raw_name.lower()} ({raw_name})")
+            if not raw_name.startswith("MATH"):
+                ch['ch_label'].setText(f"{new_device}/{raw_name.lower()} ({raw_name})")
 
     def open_channel_selector(self):
         self.cache_current_ui_configs()
@@ -1089,15 +1148,28 @@ class DAQControlApp(QWidget):
     def cache_current_ui_configs(self):
         for ch in self.channel_ui_configs:
             raw_name = ch['name']
-            self.master_channel_configs[raw_name] = {
-                "custom_name": ch["custom_name_input"].text(),
-                "term": ch["term_cb"].currentText(),
-                "range": ch["range_cb"].currentText(),
-                "sensor": ch["sensor_cb"].currentText(),
-                "scale": ch["scale_input"].text(),
-                "unit": ch["unit_input"].text(),
-                "offset": ch["offset_input"].text()
-            }
+            if raw_name.startswith("MATH"):
+                self.master_channel_configs[raw_name].update({
+                    "custom_name": ch["custom_name_input"].text(),
+                    "expression": ch["expr_input"].text(),
+                    "unit": ch["unit_input"].text()
+                })
+            else:
+                self.master_channel_configs[raw_name].update({
+                    "custom_name": ch["custom_name_input"].text(),
+                    "term": ch["term_cb"].currentText(),
+                    "range": ch["range_cb"].currentText(),
+                    "sensor": ch["sensor_cb"].currentText(),
+                    "scale": ch["scale_input"].text(),
+                    "unit": ch["unit_input"].text(),
+                    "offset": ch["offset_input"].text()
+                })
+                if 'lpf_cb' in ch:
+                    self.master_channel_configs[raw_name].update({
+                        "lpf_on": ch["lpf_cb"].isChecked(),
+                        "lpf_cutoff": ch["lpf_cut"].text(),
+                        "lpf_order": ch["lpf_ord"].currentText()
+                    })
 
     def apply_batch_config(self):
         b_term = self.batch_term.currentText()
@@ -1111,9 +1183,30 @@ class DAQControlApp(QWidget):
                 if idx >= 16 and b_term == "DIFF": ch_ui['term_cb'].setCurrentText("RSE")
                 else: ch_ui['term_cb'].setCurrentText(b_term)
 
-    def show_gdrive_help(self):
-        dialog = GDriveHelpDialog(self)
-        dialog.exec_()
+    def calibrate_single_offset(self, raw_name, scale_input, offset_input, term_cb, range_cb, sensor_cb):
+        if self.simulate_checkbox.isChecked():
+            offset_input.setText("0.000")
+            return
+        try: scale_val = float(scale_input.text())
+        except ValueError:
+            QMessageBox.warning(self, "Error", "Invalid Scale Factor.")
+            return
+        try:
+            with nidaqmx.Task() as task:
+                dev_prefix = self.device_cb.currentData()
+                term_path = f"{dev_prefix}/{raw_name.lower()}"
+                if sensor_cb.currentText() == "Type K":
+                    task.ai_channels.add_ai_thrmcpl_chan(term_path, thermocouple_type=ThermocoupleType.K, cjc_source=CJCSource.BUILT_IN)
+                else:
+                    config_map = {"RSE": TerminalConfiguration.RSE, "NRSE": TerminalConfiguration.NRSE, "DIFF": TerminalConfiguration.DIFF}
+                    r_str = range_cb.currentText().split(" to ")
+                    task.ai_channels.add_ai_voltage_chan(term_path, terminal_config=config_map[term_cb.currentText()], min_val=float(r_str[0]), max_val=float(r_str[1]))
+                    
+                task.timing.cfg_samp_clk_timing(rate=1000, sample_mode=AcquisitionType.FINITE, samps_per_chan=1000)
+                raw_mean = np.mean(task.read(number_of_samples_per_channel=1000, timeout=3.0))
+                # Set offset in scaled units: (Raw * Scale) - Offset = 0
+                offset_input.setText(f"{(raw_mean * scale_val):.6g}")
+        except Exception as e: QMessageBox.critical(self, "Hardware Error", f"Failed to measure offset:\n{e}")
 
     def setup_config_tab(self):
         main_lay = QVBoxLayout(self.config_tab)
@@ -1166,11 +1259,11 @@ class DAQControlApp(QWidget):
         self.config_scroll.setWidget(self.config_widget)
         main_lay.addWidget(self.config_scroll)
         
-        # UI REARRANGEMENT: Bottom Google Drive & DMM settings side-by-side
+        # Bottom Google Drive & DMM settings side-by-side
         bottom_grid = QGridLayout()
         bottom_grid.addWidget(QLabel("<b>Keithley DMM IP:</b>"), 0, 0)
         self.Keithley_DMM_IP = QLineEdit("169.254.169.37")
-        bottom_grid.addWidget(self.Keithley_DMM_IP, 0, 1, 1, 4) # Span across columns
+        bottom_grid.addWidget(self.Keithley_DMM_IP, 0, 1, 1, 4) 
         
         bottom_grid.addWidget(QLabel("<b>Google Drive Target Folder Link:</b>"), 1, 0)
         self.gdrive_link_input = QLineEdit("")
@@ -1190,15 +1283,21 @@ class DAQControlApp(QWidget):
         main_lay.addLayout(bottom_grid)
         
         bottom_hlay = QHBoxLayout()
-        self.measure_offsets_btn = QPushButton("Measure Offsets (1s)")
-        self.measure_offsets_btn.clicked.connect(self.measure_ui_offsets)
         self.apply_config_btn = QPushButton("Save Settings & Update UI")
-        self.apply_config_btn.setStyleSheet("font-weight: bold; background-color: #28a745; color: white;")
+        self.apply_config_btn.setStyleSheet("font-weight: bold; background-color: #28a745; color: white; padding: 8px;")
         self.apply_config_btn.clicked.connect(self.apply_config_update)
-        bottom_hlay.addWidget(self.measure_offsets_btn)
+        bottom_hlay.addStretch()
         bottom_hlay.addWidget(self.apply_config_btn)
         main_lay.addLayout(bottom_hlay)
         self.rebuild_config_tab()
+
+    def show_gdrive_help(self):
+        dialog = GDriveHelpDialog(self)
+        dialog.exec_()
+        
+    def show_math_help(self):
+        dialog = MathHelpDialog(self)
+        dialog.exec_()
 
     def rebuild_config_tab(self):
         while self.config_grid.count():
@@ -1212,65 +1311,65 @@ class DAQControlApp(QWidget):
         range_options = ["-10 to 10", "-5 to 5", "-2.5 to 2.5", "-0.2 to 0.2"]
         sensor_options = ["None", "Type K"]
 
-        def make_sensor_callback(sensor_cb, scale_input, unit_input, offset_input):
+        def make_sensor_callback(sensor_cb, unit_input):
             def callback(index):
                 if sensor_cb.currentText() != "None":
-                    scale_input.setText("1.0"); scale_input.setEnabled(False)
-                    offset_input.setText("0.0"); offset_input.setEnabled(False)
                     unit_input.setText("°C")
-                else:
-                    scale_input.setEnabled(True); offset_input.setEnabled(True)
             return callback
 
-        headers = ["Channel", "Custom Name", "Terminal Config", "Voltage Range", "Sensor Type", "Scale Factor", "Unit", "Offset (V)"]
+        # Exactly maintaining the original headers but appended the new options to the end
+        headers = ["Channel", "Custom Name", "Terminal Config", "Voltage Range", "Sensor Type", "Scale Factor", "Unit", "Offset", "Zero", "LPF On", "Cutoff", "Order"]
         for col, h in enumerate(headers): self.config_grid.addWidget(QLabel(f"<b>{h}</b>"), 0, col)
 
         row_idx = 1
         dev_prefix = self.device_cb.currentData()
+        import functools
         
         active_ai = [s for s in self.available_signals if s.startswith("AI")]
         if active_ai:
             ai_label = QLabel("<b>Analog Inputs (AI)</b>")
             ai_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 10px; margin-bottom: 5px;")
-            self.config_grid.addWidget(ai_label, row_idx, 0, 1, 8)
+            self.config_grid.addWidget(ai_label, row_idx, 0, 1, 12)
             row_idx += 1
 
         for raw_name in self.available_signals:
-            if raw_name == "DMM": continue
-
-            if raw_name.startswith("AO") and not any(r['name'].startswith("AO") for r in self.channel_ui_configs):
-                line = QFrame()
-                line.setFrameShape(QFrame.HLine); line.setFrameShadow(QFrame.Sunken)
-                self.config_grid.addWidget(line, row_idx, 0, 1, 8); row_idx += 1
-                ao_label = QLabel("<b>Analog Outputs (AO)</b>")
-                ao_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
-                self.config_grid.addWidget(ao_label, row_idx, 0, 1, 8); row_idx += 1
+            if not raw_name.startswith("AI"): continue
 
             cfg = self.master_channel_configs[raw_name]
             ch_label = QLabel(f"{dev_prefix}/{raw_name.lower()} ({raw_name})")
-            custom_name_input = QLineEdit(cfg["custom_name"])
+            custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
             term_cb = QComboBox()
-            if raw_name.startswith("AI") and int(raw_name[2:]) >= 16:
+            if int(raw_name[2:]) >= 16:
                 term_cb.addItems(term_options_high)
-                if cfg["term"] == "DIFF": cfg["term"] = "RSE"
-            else: term_cb.addItems(term_options)
-            term_cb.setCurrentText(cfg["term"])
+                if cfg.get("term", "RSE") == "DIFF": term_cb.setCurrentText("RSE")
+                else: term_cb.setCurrentText(cfg.get("term", "RSE"))
+            else: 
+                term_cb.addItems(term_options)
+                term_cb.setCurrentText(cfg.get("term", "DIFF"))
                 
             range_cb = QComboBox()
             range_cb.addItems(range_options)
-            range_cb.setCurrentText(cfg["range"])
+            range_cb.setCurrentText(cfg.get("range", "-10 to 10"))
             
             sensor_cb = QComboBox()
             sensor_cb.addItems(sensor_options)
-            sensor_cb.setCurrentText(cfg["sensor"])
             
-            scale_input = QLineEdit(cfg["scale"])
-            unit_input = QLineEdit(cfg["unit"])
-            offset_input = QLineEdit(cfg["offset"])
+            scale_input = QLineEdit(cfg.get("scale", "1.0"))
+            unit_input = QLineEdit(cfg.get("unit", "V"))
+            offset_input = QLineEdit(cfg.get("offset", "0.0"))
 
-            sensor_cb.currentIndexChanged.connect(make_sensor_callback(sensor_cb, scale_input, unit_input, offset_input))
-            if raw_name.startswith("AO"):
-                term_cb.setEnabled(False); range_cb.setEnabled(False); sensor_cb.setEnabled(False)
+            zero_btn = QPushButton("Zero")
+            zero_btn.clicked.connect(functools.partial(self.calibrate_single_offset, raw_name, scale_input, offset_input, term_cb, range_cb, sensor_cb))
+            
+            lpf_cb = QCheckBox()
+            lpf_cb.setChecked(cfg.get("lpf_on", False))
+            lpf_cut = QLineEdit(cfg.get("lpf_cutoff", "10.0"))
+            lpf_ord = QComboBox()
+            lpf_ord.addItems(["2", "4", "6"])
+            lpf_ord.setCurrentText(str(cfg.get("lpf_order", "4")))
+
+            sensor_cb.currentIndexChanged.connect(make_sensor_callback(sensor_cb, unit_input))
+            sensor_cb.setCurrentText(cfg.get("sensor", "None")) 
 
             self.config_grid.addWidget(ch_label, row_idx, 0)
             self.config_grid.addWidget(custom_name_input, row_idx, 1)
@@ -1280,13 +1379,85 @@ class DAQControlApp(QWidget):
             self.config_grid.addWidget(scale_input, row_idx, 5)
             self.config_grid.addWidget(unit_input, row_idx, 6)
             self.config_grid.addWidget(offset_input, row_idx, 7)
+            self.config_grid.addWidget(zero_btn, row_idx, 8)
+            self.config_grid.addWidget(lpf_cb, row_idx, 9, alignment=Qt.AlignCenter)
+            self.config_grid.addWidget(lpf_cut, row_idx, 10)
+            self.config_grid.addWidget(lpf_ord, row_idx, 11)
 
             self.channel_ui_configs.append({
                 "name": raw_name, "ch_label": ch_label, "custom_name_input": custom_name_input,
                 "term_cb": term_cb, "range_cb": range_cb, "sensor_cb": sensor_cb,
-                "scale_input": scale_input, "unit_input": unit_input, "offset_input": offset_input
+                "scale_input": scale_input, "unit_input": unit_input, "offset_input": offset_input,
+                "lpf_cb": lpf_cb, "lpf_cut": lpf_cut, "lpf_ord": lpf_ord
             })
             row_idx += 1
+
+        active_ao = [s for s in self.available_signals if s.startswith("AO")]
+        if active_ao:
+            line = QFrame()
+            line.setFrameShape(QFrame.HLine)
+            line.setFrameShadow(QFrame.Sunken)
+            self.config_grid.addWidget(line, row_idx, 0, 1, 12)
+            row_idx += 1
+            ao_label = QLabel("<b>Analog Outputs (AO)</b>")
+            ao_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
+            self.config_grid.addWidget(ao_label, row_idx, 0, 1, 12)
+            row_idx += 1
+            
+            for raw_name in active_ao:
+                cfg = self.master_channel_configs[raw_name]
+                ch_label = QLabel(f"{dev_prefix}/{raw_name.lower()} ({raw_name})")
+                custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
+                unit_input = QLineEdit("V")
+                unit_input.setEnabled(False)
+                
+                self.config_grid.addWidget(ch_label, row_idx, 0)
+                self.config_grid.addWidget(custom_name_input, row_idx, 1)
+                self.config_grid.addWidget(unit_input, row_idx, 6)
+                self.channel_ui_configs.append({
+                    "name": raw_name, "ch_label": ch_label, "custom_name_input": custom_name_input,
+                    "term_cb": QComboBox(), "range_cb": QComboBox(), "sensor_cb": QComboBox(),
+                    "scale_input": QLineEdit("1.0"), "unit_input": unit_input, "offset_input": QLineEdit("0.0")
+                })
+                row_idx += 1
+
+        active_math = [s for s in self.available_signals if s.startswith("MATH")]
+        if active_math:
+            line = QFrame()
+            line.setFrameShape(QFrame.HLine)
+            line.setFrameShadow(QFrame.Sunken)
+            self.config_grid.addWidget(line, row_idx, 0, 1, 12)
+            row_idx += 1
+            
+            m_lay = QHBoxLayout()
+            m_label = QLabel("<b>Virtual Math Channels</b>")
+            m_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
+            m_help = QPushButton("Math Help")
+            m_help.setStyleSheet("font-weight:bold; background-color:#ffc107;")
+            m_help.clicked.connect(self.show_math_help)
+            m_lay.addWidget(m_label)
+            m_lay.addWidget(m_help)
+            m_lay.addStretch()
+            self.config_grid.addLayout(m_lay, row_idx, 0, 1, 12)
+            row_idx += 1
+            
+            for raw_name in active_math:
+                cfg = self.master_channel_configs[raw_name]
+                ch_label = QLabel(f"{raw_name}")
+                custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
+                expr_input = QLineEdit(cfg.get("expression", "AI0 - AI1"))
+                unit_input = QLineEdit(cfg.get("unit", "Value"))
+                
+                self.config_grid.addWidget(ch_label, row_idx, 0)
+                self.config_grid.addWidget(custom_name_input, row_idx, 1)
+                self.config_grid.addWidget(expr_input, row_idx, 2, 1, 4) 
+                self.config_grid.addWidget(unit_input, row_idx, 6)
+                
+                self.channel_ui_configs.append({
+                    "name": raw_name, "ch_label": ch_label, "custom_name_input": custom_name_input,
+                    "expr_input": expr_input, "unit_input": unit_input
+                })
+                row_idx += 1
 
     def apply_config_update(self):
         self.cache_current_ui_configs()
@@ -1311,7 +1482,6 @@ class DAQControlApp(QWidget):
             elif ind.signal_cb.count() > 0: ind.signal_cb.setCurrentIndex(0)
         self.save_config()
         self.needs_plot_rebuild = True
-        print("[INFO] Settings saved and UI updated successfully.")
 
     def flag_plot_rebuild(self): self.needs_plot_rebuild = True
 
@@ -1367,12 +1537,13 @@ class DAQControlApp(QWidget):
                 "available_signals": self.available_signals
             },
             "master_channels": self.master_channel_configs,
+            "export_settings": self.export_settings,
             "subplots": [sub.get_selected_signals() for sub in self.subplot_widgets],
             "indicators": [{"signal": ind.signal_cb.currentData(), "type": ind.type_cb.currentText()} for ind in self.indicator_widgets]
         }
         try:
             with open("daq_config.json", "w") as f: json.dump(config, f, indent=4)
-        except Exception as e: print(f"[ERROR] Failed to save config: {e}")
+        except Exception: pass
 
     def load_config(self):
         if not os.path.exists("daq_config.json"): 
@@ -1406,6 +1577,8 @@ class DAQControlApp(QWidget):
             if "master_channels" in config:
                 for k, v in config["master_channels"].items():
                     if k in self.master_channel_configs: self.master_channel_configs[k].update(v)
+            
+            self.export_settings = config.get("export_settings", {})
 
             self.rebuild_config_tab()
             self.apply_config_update()
@@ -1416,9 +1589,7 @@ class DAQControlApp(QWidget):
             for sub_signals in config.get("subplots", []): self.add_subplot(sub_signals)
             for ind_cfg in config.get("indicators", []): self.add_indicator(ind_cfg.get("signal", "AI0"), ind_cfg.get("type", "RMS"))
             return True
-        except Exception as e:
-            print(f"[ERROR] Failed to load config: {e}")
-            return False
+        except Exception: return False
 
     def get_current_channel_configs(self):
         config_map = {
@@ -1432,53 +1603,40 @@ class DAQControlApp(QWidget):
         dev_prefix = self.device_cb.currentData()
         daq_configs = []
         for ch in self.channel_ui_configs:
-            sensor_type = ch['sensor_cb'].currentText()
+            if ch['name'].startswith("MATH"):
+                daq_configs.append({
+                    'Name': ch['name'],
+                    'CustomName': ch['custom_name_input'].text().strip() or ch['name'],
+                    'Expression': ch['expr_input'].text().strip(),
+                    'Unit': ch['unit_input'].text().strip(),
+                    'Scale': 1.0, 'Offset': 0.0 
+                })
+                continue
+
+            sensor_type = ch['sensor_cb'].currentText() if 'sensor_cb' in ch else "None"
             try: scale_val = float(ch['scale_input'].text())
             except ValueError: scale_val = 1.0 
             try: offset_val = float(ch['offset_input'].text())
             except ValueError: offset_val = 0.0
-            if sensor_type != "None": scale_val, offset_val = 1.0, 0.0
+
+            lpf_on = ch['lpf_cb'].isChecked() if 'lpf_cb' in ch else False
+            try: lpf_cut = float(ch['lpf_cut'].text()) if 'lpf_cut' in ch else 10.0
+            except ValueError: lpf_cut = 10.0
+            lpf_ord = int(ch['lpf_ord'].currentText()) if 'lpf_ord' in ch else 4
+
+            t_cb_text = ch['term_cb'].currentText() if 'term_cb' in ch and ch['term_cb'].count() > 0 else "RSE"
+            r_cb_text = ch['range_cb'].currentText() if 'range_cb' in ch and ch['range_cb'].count() > 0 else "-10 to 10"
 
             daq_configs.append({
                 'Name': ch['name'], 'Terminal': f"{dev_prefix}/{ch['name'].lower()}",
                 'CustomName': ch['custom_name_input'].text().strip() or ch['name'],
-                'Config': config_map[ch['term_cb'].currentText()],
-                'Range': parse_range(ch['range_cb'].currentText()),
+                'Config': config_map.get(t_cb_text, TerminalConfiguration.RSE),
+                'Range': parse_range(r_cb_text),
                 'SensorType': sensor_type, 'Scale': scale_val,
-                'Unit': ch['unit_input'].text().strip(), 'Offset': offset_val
+                'Unit': ch['unit_input'].text().strip(), 'Offset': offset_val,
+                'LPF_On': lpf_on, 'LPF_Cutoff': lpf_cut, 'LPF_Order': lpf_ord
             })
         return daq_configs
-
-    def measure_ui_offsets(self):
-        configs = self.get_current_channel_configs()
-        if self.simulate_checkbox.isChecked():
-            for ch in self.channel_ui_configs:
-                if not ch['name'].startswith("AO") and ch['sensor_cb'].currentText() == "None":
-                    ch['offset_input'].setText("0.000000")
-            return
-            
-        active_ais = [c for c in configs if c['Name'].startswith("AI")]
-        if not active_ais: return
-            
-        try:
-            with nidaqmx.Task() as task:
-                for ch in active_ais:
-                    if ch['SensorType'] == "Type K":
-                        task.ai_channels.add_ai_thrmcpl_chan(ch['Terminal'], thermocouple_type=ThermocoupleType.K, cjc_source=CJCSource.BUILT_IN)
-                    else:
-                        task.ai_channels.add_ai_voltage_chan(ch['Terminal'], terminal_config=ch['Config'], min_val=ch['Range'][0], max_val=ch['Range'][1])
-                        
-                task.timing.cfg_samp_clk_timing(rate=1000, sample_mode=AcquisitionType.FINITE, samps_per_chan=1000)
-                data = task.read(number_of_samples_per_channel=1000, timeout=3.0)
-                means = [np.mean(data)] if len(active_ais) == 1 else np.mean(data, axis=1)
-                
-                ai_idx = 0
-                for i, ch_ui in enumerate(self.channel_ui_configs):
-                    if ch_ui['name'].startswith("AI"):
-                        if active_ais[ai_idx]['SensorType'] == "None":
-                            ch_ui['offset_input'].setText(f"{means[ai_idx]:.6f}")
-                        ai_idx += 1
-        except Exception as e: print(f"[ERROR] Failed to measure offsets: {e}")
 
     def start_read(self):
         self.apply_config_update()
@@ -1496,6 +1654,10 @@ class DAQControlApp(QWidget):
                 
         self.needs_plot_rebuild = True
         self.active_math_signals = set(ind.signal_cb.currentData() for ind in self.indicator_widgets)
+
+        # LOCK TEXTBOXES
+        self.read_rate_input.setEnabled(False)
+        self.average_samples_input.setEnabled(False)
 
         while not self.tdms_queue.empty(): self.tdms_queue.get()
         while not self.process_queue.empty(): self.process_queue.get()
@@ -1517,6 +1679,11 @@ class DAQControlApp(QWidget):
     def stop_read(self):
         self.read_stop_flag.set()
         self.gui_timer.stop()
+        
+        # UNLOCK TEXTBOXES
+        self.read_rate_input.setEnabled(True)
+        self.average_samples_input.setEnabled(True)
+        
         threading.Thread(target=self._wait_and_upload).start()
 
     def _wait_and_upload(self):
@@ -1546,8 +1713,7 @@ class DAQControlApp(QWidget):
                     for i, sig in enumerate(active_ao): channels.append(ChannelObject("RawData", sig, ao_data[i]))
                     if has_dmm: channels.append(ChannelObject("RawData", "DMM", dmm_data.flatten()))
                     writer.write_segment(channels)
-            print(f"[INFO] TDMS recording saved: {filename}")
-        except Exception as e: print(f"[ERROR] TDMS Writer Thread failed: {e}")
+        except Exception: pass
 
     def DMM_read(self):
         if "DMM" not in self.available_signals: return
@@ -1586,7 +1752,6 @@ class DAQControlApp(QWidget):
     def read_voltages(self):
         configs = self.active_channel_configs
         active_ai_configs = [c for c in configs if c['Name'].startswith("AI")]
-        ai_offsets = np.array([cfg['Offset'] for cfg in active_ai_configs])[:, np.newaxis]
         
         n_ai = len(active_ai_configs)
         n_ao = sum(1 for c in configs if c['Name'].startswith("AO"))
@@ -1611,8 +1776,10 @@ class DAQControlApp(QWidget):
                     if n_ai > 0:
                         ai_data = np.random.uniform(-0.1, 0.1, (n_ai, samples_per_read))
                         if n_ai > 0: ai_data[0, :] += np.sin(2 * np.pi * 50 * time_arr) * 2.0  
+                        for i, cfg in enumerate(active_ai_configs):
+                            if cfg['SensorType'] == "Type K":
+                                ai_data[i, :] = np.random.uniform(24.5, 25.5, samples_per_read)
                         raw_ai_tdms = ai_data.copy()
-                        ai_data = ai_data - ai_offsets 
                     else:
                         ai_data = raw_ai_tdms = np.empty((0, samples_per_read))
 
@@ -1654,10 +1821,9 @@ class DAQControlApp(QWidget):
                     if task is not None:
                         stream_reader.read_many_sample(data=ai_data, number_of_samples_per_channel=samples_per_read, timeout=safe_timeout)
                         raw_ai_tdms = ai_data.copy()
-                        ai_data_processed = ai_data - ai_offsets
                     else:
                         time.sleep(samples_per_read / read_rate)
-                        ai_data_processed = raw_ai_tdms = ai_data
+                        raw_ai_tdms = ai_data
                 except Exception: continue
 
                 if n_ao > 0:
@@ -1673,7 +1839,7 @@ class DAQControlApp(QWidget):
                 try: self.tdms_queue.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
                 except queue.Full: pass
                 
-                data_to_process = np.vstack((ai_data_processed, ao_chunk, dmm_chunk))
+                data_to_process = np.vstack((raw_ai_tdms, ao_chunk, dmm_chunk))
                 try: self.process_queue.put_nowait((global_time, data_to_process))
                 except queue.Full: pass
 
@@ -1693,13 +1859,28 @@ class DAQControlApp(QWidget):
         except ValueError: average_samples = 100
         
         configs = self.active_channel_configs
-        scales = {cfg["Name"]: cfg["Scale"] for cfg in configs}
-        scales["DMM"] = 1.0 
-        num_signals = len(self.available_signals)
-        if num_signals == 0: return
+        cfg_dict = {c["Name"]: c for c in configs}
+        
+        hw_signals = [sig for sig in self.available_signals if not sig.startswith("MATH")]
+        math_signals = [sig for sig in self.available_signals if sig.startswith("MATH")]
+        
+        num_hw = len(hw_signals)
+        num_total = len(self.available_signals)
+        if num_total == 0: return
+
+        # INIT BUTTERWORTH FILTERS
+        filter_sos = {}
+        filter_states = {}
+        for sig in self.available_signals:
+            if sig in cfg_dict and cfg_dict[sig].get("LPF_On", False):
+                cutoff = cfg_dict[sig].get("LPF_Cutoff", 10.0)
+                order = cfg_dict[sig].get("LPF_Order", 4)
+                if cutoff < (rate / 2.0):
+                    filter_sos[sig] = signal.butter(order, cutoff, btype='low', fs=rate, output='sos')
+                    filter_states[sig] = None
 
         math_samps = int(rate * 0.5)
-        math_buffer = np.zeros((num_signals, math_samps), dtype=np.float64)
+        math_buffer = np.zeros((num_total, math_samps), dtype=np.float64)
 
         accum_data = []
         accum_t = []
@@ -1710,18 +1891,48 @@ class DAQControlApp(QWidget):
             except queue.Empty: continue
 
             n_new = data_chunk.shape[1]
-            if n_new >= math_samps: math_buffer = data_chunk[:, -math_samps:]
+            
+            processed_chunk = np.zeros((num_total, n_new), dtype=np.float64)
+            
+            eval_dict = {}
+
+            # APPLY FILTERING, SCALING, AND OFFSET (Raw * Scale - Offset)
+            for i, sig in enumerate(hw_signals):
+                row = data_chunk[i, :]
+                
+                if sig in filter_sos:
+                    if filter_states[sig] is None:
+                        filter_states[sig] = signal.sosfilt_zi(filter_sos[sig]) * row[0]
+                    row, filter_states[sig] = signal.sosfilt(filter_sos[sig], row, zi=filter_states[sig])
+                
+                scale = cfg_dict[sig].get("Scale", 1.0) if sig in cfg_dict else 1.0
+                offset = cfg_dict[sig].get("Offset", 0.0) if sig in cfg_dict else 0.0
+                processed_row = (row * scale) - offset
+                processed_chunk[i, :] = processed_row
+                eval_dict[sig] = processed_row
+
+            eval_dict['np'] = np
+            for i, sig in enumerate(math_signals):
+                expr = cfg_dict[sig].get("Expression", "0")
+                try:
+                    result = eval(expr, {"__builtins__": None}, eval_dict)
+                    if isinstance(result, (int, float)): result = np.full(n_new, result)
+                    processed_chunk[num_hw + i, :] = result
+                except Exception:
+                    processed_chunk[num_hw + i, :] = np.zeros(n_new)
+                eval_dict[sig] = processed_chunk[num_hw + i, :]
+
+            if n_new >= math_samps: math_buffer = processed_chunk[:, -math_samps:]
             else:
                 math_buffer = np.roll(math_buffer, -n_new, axis=1)
-                math_buffer[:, -n_new:] = data_chunk
+                math_buffer[:, -n_new:] = processed_chunk
 
             samples_100ms = int(rate * 0.1)
             active_maths = self.active_math_signals
             
             for i, sig in enumerate(self.available_signals):
                 if sig not in active_maths: continue 
-                scale = scales.get(sig, 1.0)
-                sig_data = math_buffer[i, :] * scale
+                sig_data = math_buffer[i, :]
                 if len(sig_data) == 0: continue
                 
                 cur_avg = np.mean(sig_data[-samples_100ms:]) if len(sig_data) > samples_100ms else np.mean(sig_data)
@@ -1733,7 +1944,7 @@ class DAQControlApp(QWidget):
                     
                 self.latest_math_values[sig] = {"Current (100ms avg)": cur_avg, "RMS": rms, "Peak-to-Peak": p2p, "Frequency": freq}
 
-            accum_data.append(data_chunk)
+            accum_data.append(processed_chunk)
             accum_t.append(t_chunk)
             accum_len += n_new
 
@@ -1744,13 +1955,13 @@ class DAQControlApp(QWidget):
                 n_points = accum_len // average_samples
                 valid_len = n_points * average_samples
                 
-                avg_data = np.mean(big_data[:, :valid_len].reshape((num_signals, n_points, average_samples)), axis=2)
+                avg_data = np.mean(big_data[:, :valid_len].reshape((num_total, n_points, average_samples)), axis=2)
                 avg_t = np.mean(big_t[:valid_len].reshape((n_points, average_samples)), axis=1)
 
                 with self.history_lock:
                     self.history_time.extend(avg_t)
                     for i, sig in enumerate(self.available_signals):
-                        self.history_data[sig].extend(avg_data[i, :] * scales.get(sig, 1.0))
+                        self.history_data[sig].extend(avg_data[i, :])
 
                 rem_data = big_data[:, valid_len:]
                 rem_t = big_t[valid_len:]
@@ -1759,7 +1970,6 @@ class DAQControlApp(QWidget):
                 accum_len = rem_data.shape[1]
 
     def update_gui(self):
-        # Calculate Frame Rate (FPS)
         now = time.perf_counter()
         dt = now - self.last_update_time
         self.last_update_time = now
@@ -1790,29 +2000,22 @@ class DAQControlApp(QWidget):
 
         with self.history_lock:
             if len(self.history_time) == 0: return
-            # Quickly pull snapshot of live RAM
+            
             t_full = np.array(self.history_time)
             y_full = {sig: np.array(self.history_data[sig]) for sig in required_signals}
 
-        # NEW TIME-ACCURATE SLICING LOGIC
         if window_s > 0 and len(t_full) > 0:
             cutoff_time = t_full[-1] - window_s
-            # searchsorted is C-level NumPy: finds the exact cutoff index in microseconds
             start_idx = np.searchsorted(t_full, cutoff_time)
-            
             t_arr = t_full[start_idx:]
             y_arrays = {sig: y_full[sig][start_idx:] for sig in required_signals}
         else:
             t_arr = t_full
             y_arrays = y_full
 
-        # FAST VISUAL DECIMATION FILTER FOR MATPLOTLIB
         MAX_VISUAL_POINTS = 1500 
         step = max(1, len(t_arr) // MAX_VISUAL_POINTS)
-        
         t_arr = t_arr[::step]
-        for sig in y_arrays:
-            y_arrays[sig] = y_arrays[sig][::step]
 
         if self.needs_plot_rebuild:
             self.figure.clear()
@@ -1849,7 +2052,8 @@ class DAQControlApp(QWidget):
         for i, ax in enumerate(self.axs):
             for raw_sig in self.subplot_widgets[i].get_selected_signals():
                 if raw_sig in self.plot_lines[i] and raw_sig in y_arrays:
-                    self.plot_lines[i][raw_sig].set_data(t_arr, y_arrays[raw_sig])
+                    y_arr = np.array(y_arrays[raw_sig])[::step]
+                    self.plot_lines[i][raw_sig].set_data(t_arr, y_arr)
             
             if len(t_arr) > 1:
                 ax.set_xlim(left=t_arr[0], right=t_arr[-1])
@@ -1938,6 +2142,9 @@ class DAQControlApp(QWidget):
         self.write_stop_flag.set()
         self.read_stop_flag.set()
         self.gui_timer.stop()
+        
+        self.read_rate_input.setEnabled(True)
+        self.average_samples_input.setEnabled(True)
 
         if self.write_thread and self.write_thread.is_alive(): self.write_thread.join(timeout=3)
         if self.read_thread and self.read_thread.is_alive(): self.read_thread.join(timeout=3)
@@ -1969,8 +2176,14 @@ class DAQControlApp(QWidget):
         self.update_gui()
 
     def open_export_dialog(self):
+        # Disable the button to prevent double-click queueing
+        self.export_ascii_btn.setEnabled(False)
+        
         dialog = ExportDialog(self)
         dialog.exec_()
+        
+        # Re-enable the button once the dialog is closed
+        self.export_ascii_btn.setEnabled(True)
 
     def closeEvent(self, event):
         print("[INFO] Exiting application. Saving config, stopping tasks and zeroing AO0...")
