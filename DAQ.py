@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import threading
+import multiprocessing as mp
 import queue
 import socket
 import numpy as np
@@ -16,9 +17,10 @@ from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QTabWidget, QComboBox, QDialog, QMessageBox, QGroupBox, QDoubleSpinBox, QFormLayout, QFrame)
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread
 
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
-from matplotlib.widgets import SpanSelector
+# --- REPLACED MATPLOTLIB WITH PYQTGRAPH ---
+import pyqtgraph as pg
+pg.setConfigOption('background', 'w')  # Set white background to match Matplotlib
+pg.setConfigOption('foreground', 'k')  # Set black axes/text
 
 from nptdms import TdmsWriter, ChannelObject, TdmsFile
 from datetime import datetime
@@ -27,7 +29,7 @@ import time
 from pathlib import Path
 import traceback
 import re
-import scipy.signal as signal  # Added for Butterworth LPF
+import scipy.signal as signal  
 
 # =============================================================================
 # GOOGLE DRIVE API IMPORTS (BOTH METHODS)
@@ -58,7 +60,233 @@ def get_terminal_name_with_dev_prefix(task: nidaqmx.Task, terminal_name: str) ->
     raise RuntimeError("Suitable device not found in task.")
 
 # =============================================================================
-# UI WIDGET: HELP DIALOGS
+# MULTIPROCESSING WORKERS (Runs on separate CPU Cores)
+# =============================================================================
+
+def daq_read_worker(stop_event, simulate, read_rate, samples_per_read, active_ai_configs, 
+                    n_ai, n_ao, has_dmm, available_signals, ao_state_dict, dmm_buffer_list, 
+                    tdms_q, process_q):
+    """ Runs on Core 2: Handles hardware communication and pulls raw arrays. """
+    sample_nr = 0
+    safe_timeout = (samples_per_read / read_rate) + 2.0
+    task = None
+    stream_reader = None
+
+    try:
+        if simulate:
+            t_wave = 0
+            while not stop_event.is_set():
+                t_start = time.time()
+                time_arr = np.linspace(t_wave, t_wave + samples_per_read/read_rate, samples_per_read, endpoint=False)
+                t_wave += samples_per_read/read_rate
+                
+                if n_ai > 0:
+                    ai_data = np.random.uniform(-0.1, 0.1, (n_ai, samples_per_read))
+                    ai_data[0, :] += np.sin(2 * np.pi * 50 * time_arr) * 2.0  
+                    for i, cfg in enumerate(active_ai_configs):
+                        if cfg.get('SensorType') == "Type K":
+                            ai_data[i, :] = np.random.uniform(24.5, 25.5, samples_per_read)
+                    raw_ai_tdms = ai_data.copy()
+                else:
+                    ai_data = raw_ai_tdms = np.empty((0, samples_per_read))
+
+                if n_ao > 0:
+                    ao_vals = np.array([ao_state_dict.get(f"AO{i}", 0.0) for i in range(4) if f"AO{i}" in available_signals])
+                    ao_chunk = np.repeat(ao_vals[:, None], samples_per_read, axis=1)
+                else: ao_chunk = np.empty((0, samples_per_read))
+
+                # Handle DMM from shared list
+                if has_dmm: 
+                    dmm_data = np.asarray(list(dmm_buffer_list))
+                    del dmm_buffer_list[:] # clear buffer
+                    if len(dmm_data) == 0: dmm_chunk = np.zeros(samples_per_read)
+                    elif len(dmm_data) < samples_per_read:
+                        dmm_chunk = np.concatenate([np.repeat(dmm_data, samples_per_read // len(dmm_data)), np.repeat(dmm_data[-1], samples_per_read - len(dmm_data)* (samples_per_read // len(dmm_data)))])
+                    else:
+                        idx = np.linspace(0, len(dmm_data), samples_per_read+1, endpoint=True).astype(int)
+                        dmm_chunk = np.array([dmm_data[idx[i]:idx[i+1]].mean() if len(dmm_data[idx[i]:idx[i+1]]) > 0 else dmm_chunk[-1] for i in range(samples_per_read)])
+                    dmm_chunk = dmm_chunk.reshape(1, -1)
+                else: dmm_chunk = np.empty((0, samples_per_read))
+                
+                global_time = (sample_nr + np.arange(samples_per_read)) / read_rate
+                
+                try: tdms_q.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
+                except queue.Full: pass 
+                
+                data_to_process = np.vstack((raw_ai_tdms, ao_chunk, dmm_chunk)) if len(available_signals) > 0 else np.empty((0, samples_per_read))
+                try: process_q.put_nowait((global_time, data_to_process))
+                except queue.Full: pass 
+                
+                sample_nr += samples_per_read
+                elapsed = time.time() - t_start
+                if (samples_per_read / read_rate) - elapsed > 0: time.sleep((samples_per_read / read_rate) - elapsed)
+            return
+
+        # Real Hardware Setup
+        ai_data = np.zeros((n_ai, samples_per_read), dtype=np.float64) if n_ai > 0 else np.empty((0, samples_per_read))
+        if n_ai > 0:
+            task = nidaqmx.Task()
+            for ch in active_ai_configs:
+                if ch.get('SensorType') == "Type K": 
+                    task.ai_channels.add_ai_thrmcpl_chan(ch['Terminal'], thermocouple_type=ThermocoupleType.K, cjc_source=CJCSource.BUILT_IN)
+                else: 
+                    task.ai_channels.add_ai_voltage_chan(ch['Terminal'], terminal_config=ch['Config'], min_val=ch['Range'][0], max_val=ch['Range'][1])
+            task.timing.cfg_samp_clk_timing(rate=read_rate, sample_mode=AcquisitionType.CONTINUOUS, samps_per_chan=int(read_rate * 10))
+            stream_reader = stream_readers.AnalogMultiChannelReader(task.in_stream)
+            task.start()
+
+        while not stop_event.is_set():
+            try:
+                if task is not None:
+                    stream_reader.read_many_sample(data=ai_data, number_of_samples_per_channel=samples_per_read, timeout=safe_timeout)
+                    raw_ai_tdms = ai_data.copy()
+                else:
+                    time.sleep(samples_per_read / read_rate)
+                    raw_ai_tdms = ai_data
+            except Exception: continue
+
+            if n_ao > 0:
+                ao_vals = np.array([ao_state_dict.get(f"AO{i}", 0.0) for i in range(4) if f"AO{i}" in available_signals])
+                ao_chunk = np.repeat(ao_vals[:, None], samples_per_read, axis=1)
+            else: ao_chunk = np.empty((0, samples_per_read))
+
+            if has_dmm: 
+                dmm_data = np.asarray(list(dmm_buffer_list))
+                del dmm_buffer_list[:] 
+                if len(dmm_data) == 0: dmm_chunk = np.zeros(samples_per_read)
+                elif len(dmm_data) < samples_per_read:
+                    dmm_chunk = np.concatenate([np.repeat(dmm_data, samples_per_read // len(dmm_data)), np.repeat(dmm_data[-1], samples_per_read - len(dmm_data)* (samples_per_read // len(dmm_data)))])
+                else:
+                    idx = np.linspace(0, len(dmm_data), samples_per_read+1, endpoint=True).astype(int)
+                    dmm_chunk = np.array([dmm_data[idx[i]:idx[i+1]].mean() if len(dmm_data[idx[i]:idx[i+1]]) > 0 else dmm_chunk[-1] for i in range(samples_per_read)])
+                dmm_chunk = dmm_chunk.reshape(1, -1)
+            else: dmm_chunk = np.empty((0, samples_per_read))
+
+            global_time = (sample_nr + np.arange(samples_per_read)) / read_rate
+            
+            try: tdms_q.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
+            except queue.Full: pass
+            
+            data_to_process = np.vstack((raw_ai_tdms, ao_chunk, dmm_chunk))
+            try: process_q.put_nowait((global_time, data_to_process))
+            except queue.Full: pass
+
+            sample_nr += samples_per_read
+
+    except Exception as e: print(f"[ERROR] read_voltages process crashed: {e}")
+    finally:
+        if task is not None:
+            try: task.stop(); task.close()
+            except: pass
+
+def math_processing_worker(stop_event, rate, average_samples, available_signals, 
+                           hw_signals, math_signals, cfg_dict, process_q, gui_q):
+    """ Runs on Core 3: Handles high-speed math, Butterworth filtering, and averaging """
+    num_hw = len(hw_signals)
+    num_total = len(available_signals)
+    if num_total == 0: return
+
+    filter_sos = {}
+    filter_states = {}
+    for sig in available_signals:
+        if sig in cfg_dict and cfg_dict[sig].get("LPF_On", False):
+            cutoff = cfg_dict[sig].get("LPF_Cutoff", 10.0)
+            order = cfg_dict[sig].get("LPF_Order", 4)
+            if cutoff < (rate / 2.0):
+                filter_sos[sig] = signal.butter(order, cutoff, btype='low', fs=rate, output='sos')
+                filter_states[sig] = None
+
+    math_samps = int(rate * 0.5)
+    math_buffer = np.zeros((num_total, math_samps), dtype=np.float64)
+
+    accum_data = []
+    accum_t = []
+    accum_len = 0
+
+    while not stop_event.is_set():
+        try: t_chunk, data_chunk = process_q.get(timeout=0.1)
+        except queue.Empty: continue
+
+        n_new = data_chunk.shape[1]
+        processed_chunk = np.zeros((num_total, n_new), dtype=np.float64)
+        eval_dict = {}
+
+        # FILTERING & SCALING
+        for i, sig in enumerate(hw_signals):
+            row = data_chunk[i, :]
+            if sig in filter_sos:
+                if filter_states[sig] is None:
+                    filter_states[sig] = signal.sosfilt_zi(filter_sos[sig]) * row[0]
+                row, filter_states[sig] = signal.sosfilt(filter_sos[sig], row, zi=filter_states[sig])
+            
+            scale = cfg_dict[sig].get("Scale", 1.0) if sig in cfg_dict else 1.0
+            offset = cfg_dict[sig].get("Offset", 0.0) if sig in cfg_dict else 0.0
+            processed_row = (row * scale) - offset
+            processed_chunk[i, :] = processed_row
+            eval_dict[sig] = processed_row
+
+        # VIRTUAL MATH
+        eval_dict['np'] = np
+        for i, sig in enumerate(math_signals):
+            expr = cfg_dict[sig].get("Expression", "0")
+            try:
+                result = eval(expr, {"__builtins__": None}, eval_dict)
+                if isinstance(result, (int, float)): result = np.full(n_new, result)
+                processed_chunk[num_hw + i, :] = result
+            except Exception:
+                processed_chunk[num_hw + i, :] = np.zeros(n_new)
+            eval_dict[sig] = processed_chunk[num_hw + i, :]
+
+        if n_new >= math_samps: math_buffer = processed_chunk[:, -math_samps:]
+        else:
+            math_buffer = np.roll(math_buffer, -n_new, axis=1)
+            math_buffer[:, -n_new:] = processed_chunk
+
+        # INDICATOR MATH (100ms)
+        samples_100ms = int(rate * 0.1)
+        latest_math_values = {}
+        
+        for i, sig in enumerate(available_signals):
+            sig_data = math_buffer[i, :]
+            if len(sig_data) == 0: continue
+            
+            cur_avg = np.mean(sig_data[-samples_100ms:]) if len(sig_data) > samples_100ms else np.mean(sig_data)
+            rms = np.sqrt(np.mean(np.square(sig_data)))
+            p2p = np.max(sig_data) - np.min(sig_data)
+            centered = sig_data - np.mean(sig_data)
+            crossings = np.where((centered[:-1] < 0) & (centered[1:] >= 0))[0]
+            freq = (len(crossings) - 1) / (len(crossings)/rate) if len(crossings) > 1 else 0.0
+                
+            latest_math_values[sig] = {"Current (100ms avg)": cur_avg, "RMS": rms, "Peak-to-Peak": p2p, "Frequency": freq}
+
+        accum_data.append(processed_chunk)
+        accum_t.append(t_chunk)
+        accum_len += n_new
+
+        # DECIMATE/AVERAGE FOR GUI
+        if accum_len >= average_samples:
+            big_data = np.concatenate(accum_data, axis=1)
+            big_t = np.concatenate(accum_t)
+            
+            n_points = accum_len // average_samples
+            valid_len = n_points * average_samples
+            
+            avg_data = np.mean(big_data[:, :valid_len].reshape((num_total, n_points, average_samples)), axis=2)
+            avg_t = np.mean(big_t[:valid_len].reshape((n_points, average_samples)), axis=1)
+
+            # Dictionary structure to send back to Main Process
+            chunk_dict = {sig: avg_data[i, :] for i, sig in enumerate(available_signals)}
+            try: gui_q.put_nowait((avg_t, chunk_dict, latest_math_values))
+            except queue.Full: pass
+
+            rem_data = big_data[:, valid_len:]
+            rem_t = big_t[valid_len:]
+            accum_data = [rem_data] if rem_data.shape[1] > 0 else []
+            accum_t = [rem_t] if rem_t.shape[0] > 0 else []
+            accum_len = rem_data.shape[1]
+
+# =============================================================================
+# UI WIDGET: HELP DIALOGS & CLASSES
 # =============================================================================
 class GDriveHelpDialog(QDialog):
     def __init__(self, parent=None):
@@ -70,23 +298,19 @@ class GDriveHelpDialog(QDialog):
         
         text = """
         <h3 style="color: #0055a4;">How to use the Google Drive Auto-Uploader</h3>
-        
         <b>1. The 'auth' Folder (Security)</b><br>
         The software will automatically create an <b>auth</b> folder in your project directory. 
         You must place your security keys inside this folder. Add <code>auth/</code> to your <code>.gitignore</code> so keys are never uploaded to Git.<br><br>
-        
         <b>2. Authentication Methods</b><br>
         <b>Option A: OAuth 2.0 (User Login) - <i>Recommended for Shared PCs</i></b><br>
         - In Google Cloud Console, create an <i>OAuth Client ID (Desktop App)</i>.<br>
         - Download the JSON, rename it to exactly <b>client_secret.json</b>, and place it in the <b>auth/</b> folder.<br>
         - The first time a measurement finishes, a browser will pop up asking you to log in with your company email.<br>
         - A "Ghost Token" (<b>token.json</b>) will be saved in the auth folder. The software will securely upload files in the background as YOU for all future tests.<br><br>
-        
         <b>Option B: Service Account (Robot)</b><br>
         - In Google Cloud Console, create a <i>Service Account</i> and download its JSON key.<br>
         - Rename it to exactly <b>credentials.json</b> and place it in the <b>auth/</b> folder.<br>
         - <i>Important:</i> You must open your Google Drive and share the Target Folder with the Robot's email address.<br><br>
-        
         <b>3. Google Drive Target Folder Link</b><br>
         - Open your Google Drive in a web browser.<br>
         - Navigate inside the folder where you want the data saved (For Robot uploads, this <i>must</i> be a Shared Drive).<br>
@@ -107,7 +331,6 @@ class GDriveHelpDialog(QDialog):
         scroll.setWidget(scroll_widget)
         
         layout.addWidget(scroll)
-        
         close_btn = QPushButton("Close")
         close_btn.setStyleSheet("font-weight: bold; padding: 6px;")
         close_btn.clicked.connect(self.accept)
@@ -149,10 +372,10 @@ class MathHelpDialog(QDialog):
 
 
 # =============================================================================
-# GOOGLE DRIVE UPLOAD THREAD (DUAL AUTHENTICATION)
+# GOOGLE DRIVE UPLOAD THREAD 
 # =============================================================================
 class UploadThread(QThread):
-    status_signal = pyqtSignal(str, str) # message, color
+    status_signal = pyqtSignal(str, str) 
 
     def __init__(self, file_path, gdrive_link, auth_method, is_export=False):
         super().__init__()
@@ -167,11 +390,8 @@ class UploadThread(QThread):
             return
             
         try:
-            # Ensure Auth directory exists
             auth_dir = os.path.join(os.getcwd(), 'auth')
             os.makedirs(auth_dir, exist_ok=True)
-            
-            # Extract Folder ID from the link
             base_folder_id = None
             match = re.search(r'folders/([a-zA-Z0-9_-]+)', self.gdrive_link)
             if match:
@@ -187,7 +407,6 @@ class UploadThread(QThread):
             SCOPES = ['https://www.googleapis.com/auth/drive.file']
             creds = None
 
-            # --- AUTHENTICATION BRANCHING ---
             if self.auth_method == "OAuth 2.0 (User Login)":
                 token_path = os.path.join(auth_dir, 'token.json')
                 secret_path = os.path.join(auth_dir, 'client_secret.json')
@@ -215,7 +434,6 @@ class UploadThread(QThread):
             else:
                 self.status_signal.emit("Failed: Unknown Auth Method", "orange")
                 return
-            # --------------------------------
 
             service = build('drive', 'v3', credentials=creds)
             date_str = datetime.now().strftime("%d_%m_%Y")
@@ -240,7 +458,6 @@ class UploadThread(QThread):
 
             self.status_signal.emit(f"Resolving Cloud Folder...", "orange")
             target_folder_id = get_or_create_folder(date_str, base_folder_id)
-            
             if self.is_export:
                 target_folder_id = get_or_create_folder("export", target_folder_id)
 
@@ -467,7 +684,6 @@ class ChannelSelectionDialog(QDialog):
         ao_group.setLayout(ao_layout)
         layout.addWidget(ao_group)
 
-        # MATH CHANNELS ADDED HERE
         math_group = QGroupBox("Virtual Math Channels")
         math_layout = QGridLayout()
         r, c = 0, 0
@@ -586,22 +802,31 @@ class ExportDialog(QDialog):
         preview_top.addStretch()
         right_layout.addLayout(preview_top)
 
-        self.figure = plt.figure(figsize=(7, 5))
-        self.canvas = FigureCanvas(self.figure)
-        self.ax = self.figure.add_subplot(111)
-        right_layout.addWidget(self.canvas)
+        # --- PYQTGRAPH REPLACEMENT FOR MATPLOTLIB IN EXPORT ---
+        self.preview_plot = pg.PlotWidget(title="Preview Channel")
+        self.preview_plot.setLabel('bottom', "Time (s)")
+        self.preview_plot.setLabel('left', "Amplitude")
+        self.preview_plot.showGrid(x=True, y=True)
+        self.preview_curve = self.preview_plot.plot(pen=pg.mkPen('b', width=1.5))
         
-        self.span = None
+        self.region = pg.LinearRegionItem()
+        self.region.setZValue(10)
+        self.preview_plot.addItem(self.region, ignoreBounds=True)
+        self.region.sigRegionChangeFinished.connect(self.update_region_text)
+        right_layout.addWidget(self.preview_plot)
+        # ------------------------------------------------------
+        
         self.tdms_path = self.parent.current_tdms_filepath
         self.time_data = None
         
-        if os.path.exists(self.tdms_path) and not (self.parent.read_thread and self.parent.read_thread.is_alive()):
+        if os.path.exists(self.tdms_path):
             try:
                 with TdmsFile.read(self.tdms_path) as tdms_file:
                     group = tdms_file["RawData"]
                     self.time_data = group["Time"][:]
                     self.start_time_input.setText(f"{self.time_data[0]:.3f}")
                     self.end_time_input.setText(f"{self.time_data[-1]:.3f}")
+                    self.region.setRegion([self.time_data[0], self.time_data[-1]])
                     
                     for sig in self.parent.available_signals:
                         if sig in group:
@@ -611,13 +836,18 @@ class ExportDialog(QDialog):
                 self.preview_cb.currentIndexChanged.connect(self.update_preview_plot)
                 self.update_preview_plot() 
             except Exception as e:
-                self.ax.set_title(f"Could not load preview.")
+                self.preview_plot.setTitle(f"Could not load preview.")
         else:
-            self.ax.set_title("Stop the DAQ measurement to view interactive preview.")
+            self.preview_plot.setTitle("No recording found.")
             self.preview_cb.setEnabled(False)
             
         main_layout.addLayout(left_layout, stretch=1)
         main_layout.addLayout(right_layout, stretch=2)
+
+    def update_region_text(self):
+        min_x, max_x = self.region.getRegion()
+        self.start_time_input.setText(f"{min_x:.3f}")
+        self.end_time_input.setText(f"{max_x:.3f}")
 
     def update_preview_plot(self):
         if self.time_data is None: return
@@ -629,25 +859,11 @@ class ExportDialog(QDialog):
                 group = tdms_file["RawData"]
                 if sig in group:
                     y_data = group[sig][:]
-                    self.ax.clear()
                     step = max(1, len(self.time_data) // 3000)
-                    self.ax.plot(self.time_data[::step], y_data[::step], color='#0078D7', alpha=0.8)
-                    self.ax.set_title(f"Preview: {self.preview_cb.currentText()} (Click and Drag to select window)")
-                    self.ax.set_xlabel("Time (s)")
-                    self.ax.set_ylabel("Amplitude")
-                    self.ax.grid(True)
-                    self.span = SpanSelector(self.ax, self.on_span_select, 'horizontal', useblit=True)
-                    self.canvas.draw_idle()
+                    self.preview_curve.setData(self.time_data[::step], y_data[::step])
         except Exception: pass
-
-    def on_span_select(self, xmin, xmax):
-        self.start_time_input.setText(f"{xmin:.3f}")
-        self.end_time_input.setText(f"{xmax:.3f}")
         
     def process_export(self):
-        if self.parent.read_thread and self.parent.read_thread.is_alive():
-            QMessageBox.warning(self, "Warning", "Please stop measurement before exporting.")
-            return
         if not os.path.exists(self.tdms_path):
             QMessageBox.critical(self, "Error", "No recorded TDMS file found to export.")
             return
@@ -714,7 +930,6 @@ class ExportDialog(QDialog):
                             unit = cfg["Unit"]
                             scale = cfg.get("Scale", 1.0)
                             offset = cfg.get("Offset", 0.0)
-                            # UPDATED MATH: (Raw * Scale) - Offset
                             val = (raw_v_sliced * scale) - offset
                         else:
                             custom_name, unit, scale, offset = "DMM", "V", 1.0, 0.0
@@ -751,7 +966,6 @@ class ExportDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self, "Export Error", f"An error occurred:\n{e}")
             traceback.print_exc()
-            # Only re-enable the button if an error occurred and the window stays open
             self.export_btn.setText("Export to CSV")
             self.export_btn.setEnabled(True)
 
@@ -858,17 +1072,26 @@ class DAQControlApp(QWidget):
         super().__init__()
         self.setWindowTitle("DAQ Control GUI")
 
-        self.dmmbuffer = []
-        self.write_thread = None
         self.DMMread_thread = None
-        self.read_thread = None
-        self.processing_thread = None
         self.tdms_writer_thread = None
         self.upload_thread = None
         
-        self.write_stop_flag = threading.Event()
-        self.read_stop_flag = threading.Event()
+        # --- MULTIPROCESSING COMPONENTS ---
+        self.daq_process = None
+        self.math_process = None
         
+        self.manager = mp.Manager()
+        self.mp_stop_flag = mp.Event()
+        
+        self.tdms_queue = mp.Queue(maxsize=1000) 
+        self.process_queue = mp.Queue(maxsize=100)
+        self.gui_update_queue = mp.Queue(maxsize=100)
+        
+        self.ao_state_dict = self.manager.dict()
+        for sig in ALL_AO_CHANNELS: self.ao_state_dict[sig] = 0.0
+        self.dmm_buffer_list = self.manager.list()
+        
+        self.write_stop_flag = threading.Event()
         self.write_task = None
         self.write_task_lock = threading.Lock()
         self.history_lock = threading.Lock() 
@@ -879,9 +1102,6 @@ class DAQControlApp(QWidget):
         self.current_tdms_filepath = ""
         self.export_settings = {}
         
-        self.tdms_queue = queue.Queue(maxsize=1000) 
-        self.process_queue = queue.Queue(maxsize=100)
-
         self.available_signals = ["AI0", "AI1", "AI2", "AI3", "AI4", "AI5", "AO0", "AO1", "AO2", "AO3", "DMM"]
         self.master_channel_configs = {sig: self.get_default_channel_config(sig) for sig in ALL_CHANNELS}
         self.active_channel_configs = [] 
@@ -890,9 +1110,6 @@ class DAQControlApp(QWidget):
         self.history_time = collections.deque(maxlen=self.history_maxlen)
         self.history_data = {sig: collections.deque(maxlen=self.history_maxlen) for sig in ALL_CHANNELS}
         
-        self.current_ao_state = {sig: 0.0 for sig in ALL_AO_CHANNELS}
-        
-        self.plot_lines = {}
         self.needs_plot_rebuild = True
         self.latest_math_values = {}
         self.active_math_signals = set()
@@ -950,8 +1167,8 @@ class DAQControlApp(QWidget):
     def update_ao_state_from_pulse(self, channels, volts):
         for ch in channels:
             raw_sig = ch.split('/')[-1].upper() 
-            if raw_sig in self.current_ao_state:
-                self.current_ao_state[raw_sig] = float(volts)
+            if raw_sig in self.ao_state_dict:
+                self.ao_state_dict[raw_sig] = float(volts)
 
     def launch_analog_out(self):
         device_name = self.device_cb.currentData()
@@ -1097,14 +1314,15 @@ class DAQControlApp(QWidget):
         btn_layout.addWidget(self.exit_btn)
         btn_layout.addWidget(self.reset_btn)
 
-        self.figure = plt.figure(figsize=(10, 10))
-        self.canvas = FigureCanvas(self.figure)
-        self.axs = []
-        self.subplot_widgets = []
+# --- PYQTGRAPH REPLACEMENT FOR MATPLOTLIB ---
+        self.graph_layout = pg.GraphicsLayoutWidget()
+        self.plots = []
+        self.curves = {}
+        self.subplot_widgets = []  # <--- ADD THIS LINE BACK
 
         right_panel.addLayout(controls_layout)
         right_panel.addLayout(plot_control_layout) 
-        center_panel.addWidget(self.canvas)
+        center_panel.addWidget(self.graph_layout)
         center_panel.addLayout(btn_layout)
 
         main_layout.addLayout(left_panel, stretch=1)
@@ -1204,7 +1422,6 @@ class DAQControlApp(QWidget):
                     
                 task.timing.cfg_samp_clk_timing(rate=1000, sample_mode=AcquisitionType.FINITE, samps_per_chan=1000)
                 raw_mean = np.mean(task.read(number_of_samples_per_channel=1000, timeout=3.0))
-                # Set offset in scaled units: (Raw * Scale) - Offset = 0
                 offset_input.setText(f"{(raw_mean * scale_val):.6g}")
         except Exception as e: QMessageBox.critical(self, "Hardware Error", f"Failed to measure offset:\n{e}")
 
@@ -1259,7 +1476,6 @@ class DAQControlApp(QWidget):
         self.config_scroll.setWidget(self.config_widget)
         main_lay.addWidget(self.config_scroll)
         
-        # Bottom Google Drive & DMM settings side-by-side
         bottom_grid = QGridLayout()
         bottom_grid.addWidget(QLabel("<b>Keithley DMM IP:</b>"), 0, 0)
         self.Keithley_DMM_IP = QLineEdit("169.254.169.37")
@@ -1317,7 +1533,6 @@ class DAQControlApp(QWidget):
                     unit_input.setText("°C")
             return callback
 
-        # Exactly maintaining the original headers but appended the new options to the end
         headers = ["Channel", "Custom Name", "Terminal Config", "Voltage Range", "Sensor Type", "Scale Factor", "Unit", "Offset", "Zero", "LPF On", "Cutoff", "Order"]
         for col, h in enumerate(headers): self.config_grid.addWidget(QLabel(f"<b>{h}</b>"), 0, col)
 
@@ -1641,11 +1856,11 @@ class DAQControlApp(QWidget):
     def start_read(self):
         self.apply_config_update()
         if self.DMMread_thread and self.DMMread_thread.is_alive(): return   
-        if self.read_thread and self.read_thread.is_alive(): return     
-        if self.processing_thread and self.processing_thread.is_alive(): return
+        if self.daq_process and self.daq_process.is_alive(): return     
+        if self.math_process and self.math_process.is_alive(): return
         if self.tdms_writer_thread and self.tdms_writer_thread.is_alive(): return
         
-        self.read_stop_flag.clear()
+        self.mp_stop_flag.clear()
         if self.start_timestamp is None: self.start_timestamp = time.time()
             
         with self.history_lock:
@@ -1655,32 +1870,58 @@ class DAQControlApp(QWidget):
         self.needs_plot_rebuild = True
         self.active_math_signals = set(ind.signal_cb.currentData() for ind in self.indicator_widgets)
 
-        # LOCK TEXTBOXES
         self.read_rate_input.setEnabled(False)
         self.average_samples_input.setEnabled(False)
 
         while not self.tdms_queue.empty(): self.tdms_queue.get()
         while not self.process_queue.empty(): self.process_queue.get()
+        while not self.gui_update_queue.empty(): self.gui_update_queue.get()
+        del self.dmm_buffer_list[:]
 
+        # Thread Setup
         self.tdms_writer_thread = threading.Thread(target=self.tdms_writer_thread_func)
         self.DMMread_thread = threading.Thread(target=self.DMM_read)
-        self.read_thread = threading.Thread(target=self.read_voltages)
-        self.processing_thread = threading.Thread(target=self.process_data_thread)
-        
         self.tdms_writer_thread.start()
         self.DMMread_thread.start()
+        
+        # Multiprocessing setup 
+        configs = self.active_channel_configs
+        cfg_dict = {c["Name"]: c for c in configs}
+        active_ai_configs = [c for c in configs if c['Name'].startswith("AI")]
+        hw_signals = [sig for sig in self.available_signals if not sig.startswith("MATH")]
+        math_signals = [sig for sig in self.available_signals if sig.startswith("MATH")]
+        
+        try: read_rate = float(self.read_rate_input.text())
+        except ValueError: read_rate = 10000.0
+        try: average_samples = max(1, int(self.average_samples_input.text()))
+        except ValueError: average_samples = 100
+        samples_per_read = max(1, int(read_rate // 10)) 
+        
+        simulate = self.simulate_checkbox.isChecked()
+        has_dmm = "DMM" in self.available_signals
+        n_ai = len(active_ai_configs)
+        n_ao = sum(1 for c in configs if c['Name'].startswith("AO"))
+        
+        self.daq_process = mp.Process(target=daq_read_worker, args=(
+            self.mp_stop_flag, simulate, read_rate, samples_per_read, active_ai_configs, 
+            n_ai, n_ao, has_dmm, self.available_signals, self.ao_state_dict, self.dmm_buffer_list, 
+            self.tdms_queue, self.process_queue))
+            
+        self.math_process = mp.Process(target=math_processing_worker, args=(
+            self.mp_stop_flag, read_rate, average_samples, self.available_signals, 
+            hw_signals, math_signals, cfg_dict, self.process_queue, self.gui_update_queue))
+
         time.sleep(0.1)
-        self.read_thread.start()
-        self.processing_thread.start()
+        self.daq_process.start()
+        self.math_process.start()
         
         self.last_update_time = time.perf_counter()
         self.gui_timer.start(100)
 
     def stop_read(self):
-        self.read_stop_flag.set()
+        self.mp_stop_flag.set()
         self.gui_timer.stop()
         
-        # UNLOCK TEXTBOXES
         self.read_rate_input.setEnabled(True)
         self.average_samples_input.setEnabled(True)
         
@@ -1704,7 +1945,7 @@ class DAQControlApp(QWidget):
 
         try:
             with TdmsWriter(str(filename)) as writer:
-                while not self.read_stop_flag.is_set() or not self.tdms_queue.empty():
+                while not self.mp_stop_flag.is_set() or not self.tdms_queue.empty():
                     try: chunk = self.tdms_queue.get(timeout=0.2)
                     except queue.Empty: continue
                     time_arr, ai_data, ao_data, dmm_data = chunk
@@ -1718,264 +1959,42 @@ class DAQControlApp(QWidget):
     def DMM_read(self):
         if "DMM" not in self.available_signals: return
         if self.simulate_checkbox.isChecked():
-            while not self.read_stop_flag.is_set():
-                self.dmmbuffer.append(float(np.random.uniform(-0.1, 0.1)))
+            while not self.mp_stop_flag.is_set():
+                self.dmm_buffer_list.append(float(np.random.uniform(-0.1, 0.1)))
                 time.sleep(0.1)
             return
         inst = None
         try:
             inst = DMM6510readout.write_script_to_Keithley(self.Keithley_DMM_IP.text(), "0.05")
-            while not self.read_stop_flag.is_set():
-                self.dmmbuffer.append(float(DMM6510readout.read_data(inst)))
+            while not self.mp_stop_flag.is_set():
+                self.dmm_buffer_list.append(float(DMM6510readout.read_data(inst)))
         except Exception: pass
         finally:
             if inst is not None: 
                 try: DMM6510readout.stop_instrument(inst)
                 except: pass
 
-    def resize_dmmdata(self, length):
-        data = np.asarray(self.dmmbuffer)
-        n = len(data)
-        self.dmmbuffer = self.dmmbuffer[-1:]
-        if n == 0: return np.zeros(length)
-        if n < length:
-            block = length // n
-            pattern = np.repeat(data, block)
-            rem = length - len(pattern)
-            if rem > 0: pattern = np.concatenate([pattern, np.repeat(data[-1], rem)])
-            return pattern
-        else:
-            indices = np.linspace(0, n, length+1, endpoint=True).astype(int)
-            output = [data[indices[i]:indices[i+1]].mean() if len(data[indices[i]:indices[i+1]]) > 0 else output[-1] for i in range(length)]
-            return np.array(output)
-
-    def read_voltages(self):
-        configs = self.active_channel_configs
-        active_ai_configs = [c for c in configs if c['Name'].startswith("AI")]
-        
-        n_ai = len(active_ai_configs)
-        n_ao = sum(1 for c in configs if c['Name'].startswith("AO"))
-        has_dmm = "DMM" in self.available_signals
-        n_total = len(self.available_signals)
-        if n_total == 0: return
-
-        try:
-            self.sample_nr = 0
-            try: read_rate = float(self.read_rate_input.text())
-            except ValueError: read_rate = 10000.0
-            samples_per_read = max(1, int(read_rate // 10)) 
-            safe_timeout = (samples_per_read / read_rate) + 2.0
-
-            if self.simulate_checkbox.isChecked():
-                t_wave = 0
-                while not self.read_stop_flag.is_set():
-                    t_start = time.time()
-                    time_arr = np.linspace(t_wave, t_wave + samples_per_read/read_rate, samples_per_read, endpoint=False)
-                    t_wave += samples_per_read/read_rate
-                    
-                    if n_ai > 0:
-                        ai_data = np.random.uniform(-0.1, 0.1, (n_ai, samples_per_read))
-                        if n_ai > 0: ai_data[0, :] += np.sin(2 * np.pi * 50 * time_arr) * 2.0  
-                        for i, cfg in enumerate(active_ai_configs):
-                            if cfg['SensorType'] == "Type K":
-                                ai_data[i, :] = np.random.uniform(24.5, 25.5, samples_per_read)
-                        raw_ai_tdms = ai_data.copy()
-                    else:
-                        ai_data = raw_ai_tdms = np.empty((0, samples_per_read))
-
-                    if n_ao > 0:
-                        ao_vals = np.array([self.current_ao_state[f"AO{i}"] for i in range(4) if f"AO{i}" in self.available_signals])
-                        ao_chunk = np.repeat(ao_vals[:, None], samples_per_read, axis=1)
-                    else: ao_chunk = np.empty((0, samples_per_read))
-
-                    if has_dmm: dmm_chunk = self.resize_dmmdata(samples_per_read).reshape(1, -1)
-                    else: dmm_chunk = np.empty((0, samples_per_read))
-                    
-                    global_time = (self.sample_nr + np.arange(samples_per_read)) / read_rate
-                    try: self.tdms_queue.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
-                    except queue.Full: pass 
-                    
-                    data_to_process = np.vstack((ai_data, ao_chunk, dmm_chunk)) if n_total > 0 else np.empty((0, samples_per_read))
-                    try: self.process_queue.put_nowait((global_time, data_to_process))
-                    except queue.Full: pass 
-                    
-                    self.sample_nr += samples_per_read
-                    elapsed = time.time() - t_start
-                    if (samples_per_read / read_rate) - elapsed > 0: time.sleep((samples_per_read / read_rate) - elapsed)
-                return
-            
-            ai_data = np.zeros((n_ai, samples_per_read), dtype=np.float64) if n_ai > 0 else np.empty((0, samples_per_read))
-            task = nidaqmx.Task() if n_ai > 0 else None
-            stream_reader = None
-
-            if task is not None:
-                for ch in active_ai_configs:
-                    if ch['SensorType'] == "Type K": task.ai_channels.add_ai_thrmcpl_chan(ch['Terminal'], thermocouple_type=ThermocoupleType.K, cjc_source=CJCSource.BUILT_IN)
-                    else: task.ai_channels.add_ai_voltage_chan(ch['Terminal'], terminal_config=ch['Config'], min_val=ch['Range'][0], max_val=ch['Range'][1])
-                task.timing.cfg_samp_clk_timing(rate=read_rate, sample_mode=AcquisitionType.CONTINUOUS, samps_per_chan=int(read_rate * 10))
-                stream_reader = stream_readers.AnalogMultiChannelReader(task.in_stream)
-                task.start()
-
-            while not self.read_stop_flag.is_set():
-                try:
-                    if task is not None:
-                        stream_reader.read_many_sample(data=ai_data, number_of_samples_per_channel=samples_per_read, timeout=safe_timeout)
-                        raw_ai_tdms = ai_data.copy()
-                    else:
-                        time.sleep(samples_per_read / read_rate)
-                        raw_ai_tdms = ai_data
-                except Exception: continue
-
-                if n_ao > 0:
-                    ao_vals = np.array([self.current_ao_state[f"AO{i}"] for i in range(4) if f"AO{i}" in self.available_signals])
-                    ao_chunk = np.repeat(ao_vals[:, None], samples_per_read, axis=1)
-                else: ao_chunk = np.empty((0, samples_per_read))
-
-                if has_dmm: dmm_chunk = self.resize_dmmdata(samples_per_read).reshape(1, -1)
-                else: dmm_chunk = np.empty((0, samples_per_read))
-
-                global_time = (self.sample_nr + np.arange(samples_per_read)) / read_rate
-                
-                try: self.tdms_queue.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
-                except queue.Full: pass
-                
-                data_to_process = np.vstack((raw_ai_tdms, ao_chunk, dmm_chunk))
-                try: self.process_queue.put_nowait((global_time, data_to_process))
-                except queue.Full: pass
-
-                self.sample_nr += samples_per_read
-
-        except Exception as e: print(f"[ERROR] read_voltages crashed: {e}")
-        finally:
-            self.read_stop_flag.set()
-            if 'task' in locals() and task is not None:
-                try: task.stop(); task.close()
-                except: pass
-
-    def process_data_thread(self):
-        try: rate = float(self.read_rate_input.text())
-        except ValueError: rate = 10000.0
-        try: average_samples = max(1, int(self.average_samples_input.text()))
-        except ValueError: average_samples = 100
-        
-        configs = self.active_channel_configs
-        cfg_dict = {c["Name"]: c for c in configs}
-        
-        hw_signals = [sig for sig in self.available_signals if not sig.startswith("MATH")]
-        math_signals = [sig for sig in self.available_signals if sig.startswith("MATH")]
-        
-        num_hw = len(hw_signals)
-        num_total = len(self.available_signals)
-        if num_total == 0: return
-
-        # INIT BUTTERWORTH FILTERS
-        filter_sos = {}
-        filter_states = {}
-        for sig in self.available_signals:
-            if sig in cfg_dict and cfg_dict[sig].get("LPF_On", False):
-                cutoff = cfg_dict[sig].get("LPF_Cutoff", 10.0)
-                order = cfg_dict[sig].get("LPF_Order", 4)
-                if cutoff < (rate / 2.0):
-                    filter_sos[sig] = signal.butter(order, cutoff, btype='low', fs=rate, output='sos')
-                    filter_states[sig] = None
-
-        math_samps = int(rate * 0.5)
-        math_buffer = np.zeros((num_total, math_samps), dtype=np.float64)
-
-        accum_data = []
-        accum_t = []
-        accum_len = 0
-
-        while not self.read_stop_flag.is_set():
-            try: t_chunk, data_chunk = self.process_queue.get(timeout=0.1)
-            except queue.Empty: continue
-
-            n_new = data_chunk.shape[1]
-            
-            processed_chunk = np.zeros((num_total, n_new), dtype=np.float64)
-            
-            eval_dict = {}
-
-            # APPLY FILTERING, SCALING, AND OFFSET (Raw * Scale - Offset)
-            for i, sig in enumerate(hw_signals):
-                row = data_chunk[i, :]
-                
-                if sig in filter_sos:
-                    if filter_states[sig] is None:
-                        filter_states[sig] = signal.sosfilt_zi(filter_sos[sig]) * row[0]
-                    row, filter_states[sig] = signal.sosfilt(filter_sos[sig], row, zi=filter_states[sig])
-                
-                scale = cfg_dict[sig].get("Scale", 1.0) if sig in cfg_dict else 1.0
-                offset = cfg_dict[sig].get("Offset", 0.0) if sig in cfg_dict else 0.0
-                processed_row = (row * scale) - offset
-                processed_chunk[i, :] = processed_row
-                eval_dict[sig] = processed_row
-
-            eval_dict['np'] = np
-            for i, sig in enumerate(math_signals):
-                expr = cfg_dict[sig].get("Expression", "0")
-                try:
-                    result = eval(expr, {"__builtins__": None}, eval_dict)
-                    if isinstance(result, (int, float)): result = np.full(n_new, result)
-                    processed_chunk[num_hw + i, :] = result
-                except Exception:
-                    processed_chunk[num_hw + i, :] = np.zeros(n_new)
-                eval_dict[sig] = processed_chunk[num_hw + i, :]
-
-            if n_new >= math_samps: math_buffer = processed_chunk[:, -math_samps:]
-            else:
-                math_buffer = np.roll(math_buffer, -n_new, axis=1)
-                math_buffer[:, -n_new:] = processed_chunk
-
-            samples_100ms = int(rate * 0.1)
-            active_maths = self.active_math_signals
-            
-            for i, sig in enumerate(self.available_signals):
-                if sig not in active_maths: continue 
-                sig_data = math_buffer[i, :]
-                if len(sig_data) == 0: continue
-                
-                cur_avg = np.mean(sig_data[-samples_100ms:]) if len(sig_data) > samples_100ms else np.mean(sig_data)
-                rms = np.sqrt(np.mean(np.square(sig_data)))
-                p2p = np.max(sig_data) - np.min(sig_data)
-                centered = sig_data - np.mean(sig_data)
-                crossings = np.where((centered[:-1] < 0) & (centered[1:] >= 0))[0]
-                freq = (len(crossings) - 1) / (len(crossings)/rate) if len(crossings) > 1 else 0.0
-                    
-                self.latest_math_values[sig] = {"Current (100ms avg)": cur_avg, "RMS": rms, "Peak-to-Peak": p2p, "Frequency": freq}
-
-            accum_data.append(processed_chunk)
-            accum_t.append(t_chunk)
-            accum_len += n_new
-
-            if accum_len >= average_samples:
-                big_data = np.concatenate(accum_data, axis=1)
-                big_t = np.concatenate(accum_t)
-                
-                n_points = accum_len // average_samples
-                valid_len = n_points * average_samples
-                
-                avg_data = np.mean(big_data[:, :valid_len].reshape((num_total, n_points, average_samples)), axis=2)
-                avg_t = np.mean(big_t[:valid_len].reshape((n_points, average_samples)), axis=1)
-
-                with self.history_lock:
-                    self.history_time.extend(avg_t)
-                    for i, sig in enumerate(self.available_signals):
-                        self.history_data[sig].extend(avg_data[i, :])
-
-                rem_data = big_data[:, valid_len:]
-                rem_t = big_t[valid_len:]
-                accum_data = [rem_data] if rem_data.shape[1] > 0 else []
-                accum_t = [rem_t] if rem_t.shape[0] > 0 else []
-                accum_len = rem_data.shape[1]
-
     def update_gui(self):
+        # 1. EMPTY GUI UPDATE QUEUE
+        with self.history_lock:
+            while not self.gui_update_queue.empty():
+                try: t_chunk, data_chunk_dict, math_vals = self.gui_update_queue.get_nowait()
+                except queue.Empty: break
+                
+                self.history_time.extend(t_chunk)
+                for sig in self.available_signals:
+                    if sig in data_chunk_dict:
+                        self.history_data[sig].extend(data_chunk_dict[sig])
+                self.latest_math_values.update(math_vals)
+
+        # 2. UPDATE FPS
         now = time.perf_counter()
         dt = now - self.last_update_time
         self.last_update_time = now
         if dt > 0: self.fps_queue.append(1.0 / dt)
         if len(self.fps_queue) > 0: self.fps_label.setText(f"GUI FPS: {sum(self.fps_queue)/len(self.fps_queue):.1f}")
 
+        # 3. UPDATE MATH INDICATORS
         current_configs = self.active_channel_configs
         units = {cfg["Name"]: cfg["Unit"] for cfg in current_configs}
         custom_names = {cfg["Name"]: cfg["CustomName"] for cfg in current_configs}
@@ -1991,6 +2010,7 @@ class DAQControlApp(QWidget):
             ind.update_display(val, units.get(raw_sig, "V"), raw_sig)
         self.active_math_signals = math_sigs
 
+        # 4. PREPARE PLOT DATA
         try: window_s = float(self.plot_window_input.text())
         except ValueError: window_s = 10.0
 
@@ -2000,7 +2020,6 @@ class DAQControlApp(QWidget):
 
         with self.history_lock:
             if len(self.history_time) == 0: return
-            
             t_full = np.array(self.history_time)
             y_full = {sig: np.array(self.history_data[sig]) for sig in required_signals}
 
@@ -2013,56 +2032,80 @@ class DAQControlApp(QWidget):
             t_arr = t_full
             y_arrays = y_full
 
-        MAX_VISUAL_POINTS = 1500 
+        # FAST VISUAL DECIMATION (Prevents Python-to-C++ memory traffic jams)
+        # Limits data to 5000 points (slightly more than a 4K monitor can display)
+        MAX_VISUAL_POINTS = 5000 
         step = max(1, len(t_arr) // MAX_VISUAL_POINTS)
+        
         t_arr = t_arr[::step]
+        for sig in y_arrays:
+            y_arrays[sig] = y_arrays[sig][::step]
 
+        # NO VISUAL DECIMATION NEEDED WITH PYQTGRAPH, it handles full arrays flawlessly
+
+        # 5. REBUILD PYQTGRAPH IF NEEDED
         if self.needs_plot_rebuild:
-            self.figure.clear()
-            self.axs = []
-            self.plot_lines = {}
+            # 1. Properly destroy old ghost plots so they don't freeze in the background
+            if hasattr(self, 'plots'):
+                for p in self.plots:
+                    p.close()
+                    p.deleteLater()
+            
+            self.graph_layout.clear()
+            self.graph_layout.ci.layout.setSpacing(15) # Clean 15px gap between plots
+            
+            self.plots = []
+            self.curves = {}
             n = len(self.subplot_widgets)
             
             if n > 0:
                 for i in range(n):
-                    ax = self.figure.add_subplot(n, 1, i + 1)
-                    self.axs.append(ax)
-                    self.plot_lines[i] = {}
+                    p = self.graph_layout.addPlot(row=i, col=0)
+                    p.showGrid(x=True, y=True, alpha=0.3)
+                    
+                    # 2. Link X-axes so zooming/panning one zooms all of them seamlessly!
+                    if i > 0:
+                        p.setXLink(self.plots[0])
+                    
+                    # 3. Hide redundant X-axis text on the upper plots to prevent overlap
+                    if i < n - 1:
+                        p.showAxis('bottom', False)
+                    else:
+                        p.setLabel('bottom', "Time", units="s")
+                    
+                    self.plots.append(p)
+                    self.curves[i] = {}
                     selected_raw_signals = self.subplot_widgets[i].get_selected_signals()
                     plot_units = set()
                     
-                    for raw_sig in selected_raw_signals:
+                    for idx_color, raw_sig in enumerate(selected_raw_signals):
                         if raw_sig not in self.available_signals: continue
                         unit = units.get(raw_sig, "V")
                         c_name = custom_names.get(raw_sig, raw_sig)
                         plot_units.add(unit)
-                        line, = ax.plot([], [], label=f"{c_name} [{unit}]")
-                        self.plot_lines[i][raw_sig] = line
+                        
+                        color_tuple = PLOT_COLORS[idx_color % len(PLOT_COLORS)]
+                        pen = pg.mkPen(color=color_tuple, width=1.5)
+                        
+                        curve = p.plot(pen=pen, name=f"{c_name} [{unit}]")
+                        self.curves[i][raw_sig] = curve
                     
-                    if plot_units: ax.set_ylabel(f"Value [{', '.join(sorted(list(plot_units)))}]")
-                    else: ax.set_ylabel("Value")
+                    if plot_units: p.setLabel('left', f"Value [{', '.join(sorted(list(plot_units)))}]")
+                    else: p.setLabel('left', "Value")
                     
-                    if selected_raw_signals: ax.legend(loc='upper right')
-                    ax.grid('on')
-                    if i == n - 1: ax.set_xlabel("Time (s)")
-                    
-            self.figure.subplots_adjust(hspace=0.4)
+                    # Pin legend inside the plot cleanly
+                    if selected_raw_signals: 
+                        p.addLegend(offset=(10, 10))
+            
             self.needs_plot_rebuild = False
 
-        for i, ax in enumerate(self.axs):
+        # 6. UPDATE PYQTGRAPH DATA
+        for i, p in enumerate(self.plots):
             for raw_sig in self.subplot_widgets[i].get_selected_signals():
-                if raw_sig in self.plot_lines[i] and raw_sig in y_arrays:
-                    y_arr = np.array(y_arrays[raw_sig])[::step]
-                    self.plot_lines[i][raw_sig].set_data(t_arr, y_arr)
-            
-            if len(t_arr) > 1:
-                ax.set_xlim(left=t_arr[0], right=t_arr[-1])
-                ax.relim()
-                ax.autoscale_view(scalex=False, scaley=True)
-            elif len(t_arr) == 1:
-                ax.set_xlim(left=max(0, t_arr[0]-1), right=t_arr[0]+1)
-
-        self.canvas.draw_idle()
+                if raw_sig in self.curves[i] and raw_sig in y_arrays:
+                    y_arr = y_arrays[raw_sig]
+                    # Update line instantly
+                    self.curves[i][raw_sig].setData(t_arr, y_arr)
 
     def select_output_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Select Output Folder")
@@ -2140,15 +2183,14 @@ class DAQControlApp(QWidget):
 
     def reset_all(self):
         self.write_stop_flag.set()
-        self.read_stop_flag.set()
+        self.mp_stop_flag.set()
         self.gui_timer.stop()
         
         self.read_rate_input.setEnabled(True)
         self.average_samples_input.setEnabled(True)
 
-        if self.write_thread and self.write_thread.is_alive(): self.write_thread.join(timeout=3)
-        if self.read_thread and self.read_thread.is_alive(): self.read_thread.join(timeout=3)
-        if self.processing_thread and self.processing_thread.is_alive(): self.processing_thread.join(timeout=3)
+        if self.daq_process and self.daq_process.is_alive(): self.daq_process.join(timeout=3)
+        if self.math_process and self.math_process.is_alive(): self.math_process.join(timeout=3)
         if self.tdms_writer_thread and self.tdms_writer_thread.is_alive(): self.tdms_writer_thread.join(timeout=3)
 
         with self.write_task_lock:
@@ -2176,28 +2218,23 @@ class DAQControlApp(QWidget):
         self.update_gui()
 
     def open_export_dialog(self):
-        # Disable the button to prevent double-click queueing
         self.export_ascii_btn.setEnabled(False)
-        
         dialog = ExportDialog(self)
         dialog.exec_()
-        
-        # Re-enable the button once the dialog is closed
         self.export_ascii_btn.setEnabled(True)
 
     def closeEvent(self, event):
         print("[INFO] Exiting application. Saving config, stopping tasks and zeroing AO0...")
         self.save_config()
         self.write_stop_flag.set()
-        self.read_stop_flag.set()
+        self.mp_stop_flag.set()
         self.gui_timer.stop()
         
         if hasattr(self, 'ao_window') and self.ao_window is not None: self.ao_window.close() 
         
-        if self.write_thread and self.write_thread.is_alive(): self.write_thread.join(timeout=3)
-        if self.read_thread and self.read_thread.is_alive(): self.read_thread.join(timeout=3)
-        if self.processing_thread and self.processing_thread.is_alive(): self.processing_thread.join(timeout=3)
-        if self.tdms_writer_thread and self.tdms_writer_thread.is_alive(): self.tdms_writer_thread.join(timeout=3)
+        if self.daq_process and self.daq_process.is_alive(): self.daq_process.terminate()
+        if self.math_process and self.math_process.is_alive(): self.math_process.terminate()
+        if self.tdms_writer_thread and self.tdms_writer_thread.is_alive(): self.tdms_writer_thread.join(timeout=2)
         
         with self.write_task_lock:
             if self.write_task is not None:
@@ -2209,6 +2246,7 @@ class DAQControlApp(QWidget):
     def exit_application(self): self.close() 
 
 if __name__ == "__main__":
+    mp.freeze_support() # REQUIRED FOR WINDOWS MULTIPROCESSING
     app = QApplication(sys.argv)
     gui = DAQControlApp()
     gui.show()

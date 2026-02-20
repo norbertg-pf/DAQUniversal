@@ -51,7 +51,7 @@
             "range": "-0.2 to 0.2",
             "sensor": "Type K",
             "scale": "1",
-            "unit": "\u00b0C",
+            "unit": "K",
             "offset": "-273.16",
             "lpf_on": false,
             "lpf_cutoff": "10.0",
@@ -566,7 +566,7 @@
             "AI1"
         ],
         [
-            "MATH0"
+            "AI2"
         ]
     ],
     "indicators": [
