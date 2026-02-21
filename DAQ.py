@@ -194,6 +194,13 @@ class DAQControlApp(QWidget):
     def _is_dmm_device_selected(self):
         return self.device_cb.currentData() == self.DMM_DEVICE_ID
 
+    def _is_simulated_device_selected(self):
+        dev_name = self.device_cb.currentData() or ""
+        if not dev_name or dev_name in (self.MATH_DEVICE_ID, self.DMM_DEVICE_ID):
+            return False
+        product_type = self.device_product_types.get(dev_name, "")
+        return dev_name == "Simulated device" or "simulated" in product_type.lower()
+
     def _signal_base_name(self, signal_name):
         return signal_name.split("@", 1)[0] if "@" in signal_name else signal_name
 
@@ -500,7 +507,8 @@ class DAQControlApp(QWidget):
         valid_hw = set()
         for dev in self.detected_devices:
             valid_hw.update(self._channels_for_device(dev))
-        valid_hw.add("DMM")
+        if not self._is_simulated_device_selected():
+            valid_hw.add("DMM")
 
         kept_math = [s for s in self.available_signals if s.startswith("MATH")]
         kept_hw = [s for s in self.available_signals if s in valid_hw]
@@ -528,14 +536,19 @@ class DAQControlApp(QWidget):
             allowed_signals = [f"MATH{i}" for i in range(4)]
             active_signals = [s for s in self.available_signals if s.startswith("MATH")]
             show_dmm_ip = False
+        elif self._is_dmm_device_selected():
+            allowed_signals = ["DMM"]
+            active_signals = [s for s in self.available_signals if s == "DMM"]
+            show_dmm_ip = True
         else:
             allowed_signals = []
             for dev in self.detected_devices:
                 allowed_signals.extend(self._channels_for_device(dev))
-            if "DMM" not in allowed_signals:
+            include_dmm = not self._is_simulated_device_selected()
+            if include_dmm and "DMM" not in allowed_signals:
                 allowed_signals.append("DMM")
             active_signals = [s for s in self.available_signals if s in allowed_signals]
-            show_dmm_ip = True
+            show_dmm_ip = include_dmm
 
         dialog = ChannelSelectionDialog(
             active_signals,
