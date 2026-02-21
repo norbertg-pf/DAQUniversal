@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller build spec for a single-file Windows executable."""
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 block_cipher = None
 
@@ -24,7 +24,7 @@ a = Analysis(
     datas=[
         ("DMM6510.tsp", "."),
         ("daq_config.json", "."),
-    ],
+    ] + copy_metadata("nitypes") + copy_metadata("nidaqmx"),
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
