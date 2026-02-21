@@ -90,14 +90,14 @@ class MathHelpDialog(QDialog):
         layout = QVBoxLayout(self)
 
         vars_list = sorted(set(available_vars or []))
-        vars_text = ", ".join(vars_list[:20]) if vars_list else "AI0, AI1, DMM"
+        vars_text = ", ".join(vars_list[:20]) if vars_list else "AI0, AI1, AI_DMM"
         
         text = f"""
         <h3 style="color: #0055a4;">Using Virtual Math Channels</h3>
         Math channels let you compute values in real-time using your active Analog Inputs.
         <br><br>
         <b>How to write expressions:</b><br>
-        Use the EXACT base channel names (e.g., <b>AI0</b>, <b>AI5</b>, <b>DMM</b>) in your formula. Do NOT use your custom names.
+        Use the EXACT base channel names (e.g., <b>AI0</b>, <b>AI5</b>, <b>AI_DMM</b>) in your formula. Do NOT use your custom names.
         <br><br>
         <b>Currently available variables:</b><br>
         <code>{vars_text}</code>
@@ -149,7 +149,7 @@ class ChannelSelectionDialog(QDialog):
                 return f"{dev_disp}/{base.lower()} ({base})"
             return sig
 
-        ai_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AI")]
+        ai_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AI") and not split_sig(sig)[0].startswith("AI_DMM")]
         ao_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AO")]
         math_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("MATH")]
 
@@ -201,12 +201,13 @@ class ChannelSelectionDialog(QDialog):
             math_group.setLayout(math_layout)
             layout.addWidget(math_group)
 
-        if "DMM" in allowed:
+        dmm_sig = next((sig for sig in allowed if sig.startswith("AI_DMM")), None)
+        if dmm_sig is not None:
             dmm_group = QGroupBox("External Devices")
             dmm_layout = QVBoxLayout()
-            cb = QCheckBox("DMM")
-            cb.setChecked("DMM" in active_signals)
-            self.checkboxes["DMM"] = cb
+            cb = QCheckBox("Keithley 6510 DMM")
+            cb.setChecked(dmm_sig in active_signals)
+            self.checkboxes[dmm_sig] = cb
             dmm_layout.addWidget(cb)
             dmm_group.setLayout(dmm_layout)
             layout.addWidget(dmm_group)
@@ -256,7 +257,8 @@ class ExportDialog(QDialog):
         
         configs = self.parent.active_channel_configs
         name_map = {cfg["Name"]: cfg["CustomName"] for cfg in configs}
-        name_map["DMM"] = "DMM"
+        name_map["AI_DMM@__KEITHLEY_6510__"] = "Keithley 6510"
+        name_map["DMM"] = "Keithley 6510"
         
         ch_group = QGroupBox("Select Channels to Export")
         ch_layout = QGridLayout()
@@ -435,7 +437,7 @@ class ExportDialog(QDialog):
                             offset = cfg.get("Offset", 0.0)
                             val = (raw_v_sliced * scale) - offset
                         else:
-                            custom_name, unit, scale, offset = "DMM", "V", 1.0, 0.0
+                            custom_name, unit, scale, offset = "AI_DMM", "V", 1.0, 0.0
                             val = raw_v_sliced
                             
                         stack.append(val)

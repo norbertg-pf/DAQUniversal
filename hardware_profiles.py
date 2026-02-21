@@ -24,7 +24,7 @@ class HardwareProfile:
     def default_enabled_signals(self) -> List[str]:
         enabled_ai = [f"AI{i}" for i in self.default_enabled_ai if 0 <= i < self.ai_count]
         enabled_ao = [f"AO{i}" for i in self.default_enabled_ao if 0 <= i < self.ao_count]
-        return enabled_ai + enabled_ao + ["DMM"]
+        return enabled_ai + enabled_ao + ["AI_DMM@__KEITHLEY_6510__"]
 
 
 USB_6453_PROFILE = HardwareProfile(
