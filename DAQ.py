@@ -54,6 +54,8 @@ from ui_components import (
 
 class DAQControlApp(QWidget):
     MATH_DEVICE_ID = "__MATH_DEVICE__"
+    DMM_DEVICE_ID = "__DMM6510_DEVICE__"
+    DMM_SIGNAL_NAME = "DMM"
 
     def __init__(self):
         super().__init__()
@@ -199,6 +201,10 @@ class DAQControlApp(QWidget):
     def _is_ai_signal(self, signal_name):
         return self._signal_base_name(signal_name).startswith("AI")
 
+    def _is_ai_group_signal(self, signal_name):
+        base = self._signal_base_name(signal_name)
+        return base.startswith("AI") or base == self.DMM_SIGNAL_NAME
+
     def _is_ao_signal(self, signal_name):
         return self._signal_base_name(signal_name).startswith("AO")
 
@@ -210,6 +216,8 @@ class DAQControlApp(QWidget):
         return f"{raw_name}@{device_name}"
 
     def _channels_for_device(self, device_name):
+        if device_name == self.DMM_DEVICE_ID:
+            return [self.DMM_SIGNAL_NAME]
         ptype = self.device_product_types.get(device_name, "")
         profile = get_profile(detect_profile_name(ptype, device_name))
         return [self._mk_dev_signal(device_name, sig) for sig in (profile.ai_channels + profile.ao_channels)]
@@ -218,6 +226,8 @@ class DAQControlApp(QWidget):
         ptype = self.device_product_types.get(device_name, "")
         if device_name == "Simulated device":
             return device_name
+        if device_name == self.DMM_DEVICE_ID:
+            return "Keithley 6510 DMM"
         return f"{device_name}\\{ptype}" if ptype else device_name
 
     def _clear_layout_recursive(self, layout):
@@ -238,11 +248,11 @@ class DAQControlApp(QWidget):
 
     def _get_active_hw_device(self):
         dev_name = self.device_cb.currentData()
-        if dev_name and dev_name != self.MATH_DEVICE_ID:
+        if dev_name and dev_name not in (self.MATH_DEVICE_ID, self.DMM_DEVICE_ID):
             return dev_name
         for i in range(self.device_cb.count()):
             candidate = self.device_cb.itemData(i)
-            if candidate != self.MATH_DEVICE_ID:
+            if candidate not in (self.MATH_DEVICE_ID, self.DMM_DEVICE_ID):
                 return candidate
         return "Dev1"
 
@@ -437,12 +447,16 @@ class DAQControlApp(QWidget):
         except Exception:
             devs = [("Simulated device", "Simulated Device")]
 
+        devs.append((self.DMM_DEVICE_ID, "Keithley 6510 DMM"))
+
         idx_to_set = 0
         for i, (name, ptype) in enumerate(devs):
             self.device_product_types[name] = ptype
             self.detected_devices.append(name)
             if name == "Simulated device":
                 self.device_cb.addItem(name, userData=name)
+            elif name == self.DMM_DEVICE_ID:
+                self.device_cb.addItem("Keithley 6510 DMM", userData=name)
             else:
                 self.device_cb.addItem(f"{name} ({ptype})", userData=name)
             if name == current_data:
@@ -467,7 +481,6 @@ class DAQControlApp(QWidget):
         valid_hw = set()
         for dev in self.detected_devices:
             valid_hw.update(self._channels_for_device(dev))
-        valid_hw.add("DMM")
 
         kept_math = [s for s in self.available_signals if s.startswith("MATH")]
         kept_hw = [s for s in self.available_signals if s in valid_hw]
@@ -482,6 +495,9 @@ class DAQControlApp(QWidget):
         new_device = self.device_cb.currentData()
         if not new_device:
             return
+        is_dmm_device = new_device == self.DMM_DEVICE_ID
+        self.dmm_ip_label.setVisible(is_dmm_device)
+        self.Keithley_DMM_IP.setVisible(is_dmm_device)
         for ch in getattr(self, "channel_ui_configs", []):
             raw_name = ch['name']
             if not raw_name.startswith("MATH"):
@@ -498,7 +514,6 @@ class DAQControlApp(QWidget):
             allowed_signals = []
             for dev in self.detected_devices:
                 allowed_signals.extend(self._channels_for_device(dev))
-            allowed_signals.append("DMM")
             active_signals = [s for s in self.available_signals if s in allowed_signals]
 
         dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals)
@@ -586,6 +601,10 @@ class DAQControlApp(QWidget):
         self.device_cb = QComboBox()
         self.device_cb.currentIndexChanged.connect(self.on_device_changed)
         dev_layout.addWidget(self.device_cb)
+        self.dmm_ip_label = QLabel("<b>Keithley DMM IP:</b>")
+        dev_layout.addWidget(self.dmm_ip_label)
+        self.Keithley_DMM_IP = QLineEdit("169.254.169.37")
+        dev_layout.addWidget(self.Keithley_DMM_IP)
         self.refresh_dev_btn = QPushButton("Refresh Devices")
         self.refresh_dev_btn.clicked.connect(self.refresh_devices)
         dev_layout.addWidget(self.refresh_dev_btn)
@@ -629,10 +648,6 @@ class DAQControlApp(QWidget):
         main_lay.addWidget(self.config_scroll)
         
         bottom_grid = QGridLayout()
-        bottom_grid.addWidget(QLabel("<b>Keithley DMM IP:</b>"), 0, 0)
-        self.Keithley_DMM_IP = QLineEdit("169.254.169.37")
-        bottom_grid.addWidget(self.Keithley_DMM_IP, 0, 1, 1, 4) 
-        
         bottom_grid.addWidget(QLabel("<b>Google Drive Target Folder Link:</b>"), 1, 0)
         self.gdrive_link_input = QLineEdit("")
         self.gdrive_link_input.setPlaceholderText("https://drive.google.com/drive/folders/...")
@@ -702,7 +717,7 @@ class DAQControlApp(QWidget):
         dev_prefix = self._get_active_hw_device()
         import functools
         
-        active_ai = [s for s in self.available_signals if self._is_ai_signal(s)]
+        active_ai = [s for s in self.available_signals if self._is_ai_group_signal(s)]
         if active_ai:
             ai_label = QLabel("<b>Analog Inputs (AI)</b>")
             ai_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 10px; margin-bottom: 5px;")
@@ -710,7 +725,7 @@ class DAQControlApp(QWidget):
             row_idx += 1
 
         for raw_name in self.available_signals:
-            if not self._is_ai_signal(raw_name): continue
+            if not self._is_ai_group_signal(raw_name): continue
 
             cfg = self.master_channel_configs[raw_name]
             base_name = self._signal_base_name(raw_name)
@@ -718,7 +733,11 @@ class DAQControlApp(QWidget):
             ch_label = self._make_channel_label(dev_name, base_name)
             custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
             term_cb = QComboBox()
-            if self._ai_index(base_name) >= 16:
+            is_dmm_channel = base_name == self.DMM_SIGNAL_NAME
+            if is_dmm_channel:
+                term_cb.addItem("N/A")
+                term_cb.setEnabled(False)
+            elif self._ai_index(base_name) >= 16:
                 term_cb.addItems(term_options_high)
                 if cfg.get("term", "RSE") == "DIFF": term_cb.setCurrentText("RSE")
                 else: term_cb.setCurrentText(cfg.get("term", "RSE"))
@@ -727,18 +746,29 @@ class DAQControlApp(QWidget):
                 term_cb.setCurrentText(cfg.get("term", "DIFF"))
                 
             range_cb = QComboBox()
-            range_cb.addItems(range_options)
-            range_cb.setCurrentText(cfg.get("range", "-10 to 10"))
+            if is_dmm_channel:
+                range_cb.addItem("N/A")
+                range_cb.setEnabled(False)
+            else:
+                range_cb.addItems(range_options)
+                range_cb.setCurrentText(cfg.get("range", "-10 to 10"))
             
             sensor_cb = QComboBox()
-            sensor_cb.addItems(sensor_options)
+            if is_dmm_channel:
+                sensor_cb.addItem("None")
+                sensor_cb.setEnabled(False)
+            else:
+                sensor_cb.addItems(sensor_options)
             
             scale_input = QLineEdit(cfg.get("scale", "1.0"))
             unit_input = QLineEdit(cfg.get("unit", "V"))
             offset_input = QLineEdit(cfg.get("offset", "0.0"))
 
             zero_btn = QPushButton("Zero")
-            zero_btn.clicked.connect(functools.partial(self.calibrate_single_offset, raw_name, scale_input, offset_input, term_cb, range_cb, sensor_cb))
+            if is_dmm_channel:
+                zero_btn.setEnabled(False)
+            else:
+                zero_btn.clicked.connect(functools.partial(self.calibrate_single_offset, raw_name, scale_input, offset_input, term_cb, range_cb, sensor_cb))
             
             lpf_cb = QCheckBox()
             lpf_cb.setChecked(cfg.get("lpf_on", False))
@@ -746,6 +776,10 @@ class DAQControlApp(QWidget):
             lpf_ord = QComboBox()
             lpf_ord.addItems(["2", "4", "6"])
             lpf_ord.setCurrentText(str(cfg.get("lpf_order", "4")))
+            if is_dmm_channel:
+                lpf_cb.setEnabled(False)
+                lpf_cut.setEnabled(False)
+                lpf_ord.setEnabled(False)
 
             sensor_cb.currentIndexChanged.connect(make_sensor_callback(sensor_cb, unit_input))
             sensor_cb.setCurrentText(cfg.get("sensor", "None")) 
@@ -1017,14 +1051,17 @@ class DAQControlApp(QWidget):
             t_cb_text = ch['term_cb'].currentText() if 'term_cb' in ch and ch['term_cb'].count() > 0 else "RSE"
             r_cb_text = ch['range_cb'].currentText() if 'range_cb' in ch and ch['range_cb'].count() > 0 else "-10 to 10"
 
+            signal_kind = 'DMM' if base_name == self.DMM_SIGNAL_NAME else ('AI' if self._is_ai_signal(ch['name']) else 'AO')
+            terminal_name = "" if signal_kind == 'DMM' else f"{dev_name}/{base_name.lower()}"
+
             daq_configs.append({
-                'Name': ch['name'], 'Terminal': f"{dev_name}/{base_name.lower()}",
+                'Name': ch['name'], 'Terminal': terminal_name,
                 'CustomName': ch['custom_name_input'].text().strip() or ch['name'],
                 'Config': config_map.get(t_cb_text, TerminalConfiguration.RSE),
                 'Range': parse_range(r_cb_text),
                 'SensorType': sensor_type, 'Scale': scale_val,
                 'Unit': ch['unit_input'].text().strip(), 'Offset': offset_val,
-                'Kind': 'AI' if self._is_ai_signal(ch['name']) else 'AO',
+                'Kind': signal_kind,
                 'LPF_On': lpf_on, 'LPF_Cutoff': lpf_cut, 'LPF_Order': lpf_ord
             })
         return daq_configs
@@ -1158,6 +1195,7 @@ class DAQControlApp(QWidget):
 
         inst = None
         try:
+            import DMM6510readout
             inst = DMM6510readout.write_script_to_Keithley(self.Keithley_DMM_IP.text(), "0.05")
             while not self.mp_stop_flag.is_set():
                 try:
