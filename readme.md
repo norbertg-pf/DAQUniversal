@@ -23,14 +23,15 @@ A one-file PyInstaller spec is included as `DAQ_ui.spec`.
 1. Install runtime + build dependencies:
 
 ```bash
-pip install pyinstaller pyqtgraph
+python -m pip install --upgrade pip
+python -m pip install pyinstaller pyqtgraph
 ```
 
 2. Build a single executable and place it in `library/binaries`:
 
 ```bash
 mkdir -p library/binaries
-pyinstaller --noconfirm --clean --distpath library/binaries --workpath build DAQ_ui.spec
+python -m PyInstaller --noconfirm --clean --distpath library/binaries --workpath build DAQ_ui.spec
 ```
 
 Result:
@@ -41,3 +42,4 @@ Notes:
 
 - Build on Windows to produce a Windows `.exe`.
 - NI-DAQ/driver communication still requires compatible NI drivers/hardware on the target machine.
+- If `pyinstaller` is not recognized as a command, always use `python -m PyInstaller ...` as shown above.
