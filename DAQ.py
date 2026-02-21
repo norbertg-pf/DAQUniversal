@@ -429,7 +429,10 @@ class DAQControlApp(QWidget):
         for i, (name, ptype) in enumerate(devs):
             self.device_product_types[name] = ptype
             self.detected_devices.append(name)
-            self.device_cb.addItem(f"{name} ({ptype})", userData=name)
+            if name == "Simulated device":
+                self.device_cb.addItem(name, userData=name)
+            else:
+                self.device_cb.addItem(f"{name} ({ptype})", userData=name)
             if name == current_data:
                 idx_to_set = i
 
@@ -449,12 +452,6 @@ class DAQControlApp(QWidget):
         return get_profile(profile_name)
 
     def apply_selected_device_profile(self):
-        if self._is_math_device_selected():
-            kept_math = [s for s in self.available_signals if s.startswith("MATH")]
-            self.available_signals = kept_math if kept_math else [f"MATH{i}" for i in range(4)]
-            for sig in self.available_signals: self._ensure_signal_state(sig)
-            return
-
         valid_hw = set()
         for dev in self.detected_devices:
             valid_hw.update(self._channels_for_device(dev))
@@ -500,9 +497,11 @@ class DAQControlApp(QWidget):
         if dialog.exec_():
             selected = dialog.get_selected()
             if self._is_math_device_selected():
-                self.available_signals = selected
+                kept_hw = [s for s in self.available_signals if not s.startswith("MATH")]
+                self.available_signals = kept_hw + selected
             else:
-                self.available_signals = selected
+                kept_math = [s for s in self.available_signals if s.startswith("MATH")]
+                self.available_signals = selected + kept_math
             for sig in self.available_signals: self._ensure_signal_state(sig)
             self.rebuild_config_tab()
             self.apply_config_update()
