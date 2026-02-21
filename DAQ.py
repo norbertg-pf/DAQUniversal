@@ -21,6 +21,7 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread
 import pyqtgraph as pg
 pg.setConfigOption('background', 'w')  # Set white background to match Matplotlib
 pg.setConfigOption('foreground', 'k')  # Set black axes/text
+pg.setConfigOption('antialias', True)
 
 from nptdms import TdmsWriter, ChannelObject, TdmsFile
 from datetime import datetime
@@ -1316,6 +1317,7 @@ class DAQControlApp(QWidget):
 
 # --- PYQTGRAPH REPLACEMENT FOR MATPLOTLIB ---
         self.graph_layout = pg.GraphicsLayoutWidget()
+        self.graph_layout.setStyleSheet("background-color: #f7f9fc; border: 1px solid #d9dee8; border-radius: 6px;")
         self.plots = []
         self.curves = {}
         self.subplot_widgets = []  # <--- ADD THIS LINE BACK
@@ -2045,14 +2047,9 @@ class DAQControlApp(QWidget):
 
         # 5. REBUILD PYQTGRAPH IF NEEDED
         if self.needs_plot_rebuild:
-            # 1. Properly destroy old ghost plots so they don't freeze in the background
-            if hasattr(self, 'plots'):
-                for p in self.plots:
-                    p.close()
-                    p.deleteLater()
-            
             self.graph_layout.clear()
-            self.graph_layout.ci.layout.setSpacing(15) # Clean 15px gap between plots
+            self.graph_layout.ci.layout.setSpacing(10)
+            self.graph_layout.ci.layout.setContentsMargins(12, 12, 12, 12)
             
             self.plots = []
             self.curves = {}
@@ -2061,7 +2058,15 @@ class DAQControlApp(QWidget):
             if n > 0:
                 for i in range(n):
                     p = self.graph_layout.addPlot(row=i, col=0)
+                    p.setTitle(f"Subplot {i + 1}", color='#3c4558', size='10pt')
                     p.showGrid(x=True, y=True, alpha=0.3)
+                    p.setClipToView(True)
+                    p.setDownsampling(mode='peak')
+                    p.getViewBox().setDefaultPadding(0.02)
+                    p.getAxis('left').setWidth(80)
+                    p.getAxis('left').setStyle(tickFont=pg.QtGui.QFont("Arial", 9))
+                    p.getAxis('bottom').setStyle(tickFont=pg.QtGui.QFont("Arial", 9))
+                    p.setMinimumHeight(180)
                     
                     # 2. Link X-axes so zooming/panning one zooms all of them seamlessly!
                     if i > 0:
@@ -2070,6 +2075,7 @@ class DAQControlApp(QWidget):
                     # 3. Hide redundant X-axis text on the upper plots to prevent overlap
                     if i < n - 1:
                         p.showAxis('bottom', False)
+                        p.getAxis('bottom').setHeight(0)
                     else:
                         p.setLabel('bottom', "Time", units="s")
                     
@@ -2095,7 +2101,7 @@ class DAQControlApp(QWidget):
                     
                     # Pin legend inside the plot cleanly
                     if selected_raw_signals: 
-                        p.addLegend(offset=(10, 10))
+                        p.addLegend(offset=(-10, 10), verSpacing=2, brush=(255, 255, 255, 200), pen=pg.mkPen((180, 180, 180), width=1))
             
             self.needs_plot_rebuild = False
 
