@@ -53,6 +53,9 @@ from ui_components import (
 
 
 class DAQControlApp(QWidget):
+    MATH_DEVICE_ID = "__MATH_DEVICE__"
+    ALL_DEVICES_ID = "__ALL_DEVICES__"
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DAQ Control GUI")
@@ -94,6 +97,7 @@ class DAQControlApp(QWidget):
         
         self.current_hardware_profile = DEFAULT_HARDWARE_PROFILE
         self.device_product_types = {}
+        self.detected_devices = []
         self.available_signals = self.current_hardware_profile.default_enabled_signals.copy()
         self.master_channel_configs = {sig: self.get_default_channel_config(sig) for sig in ALL_CHANNELS}
         self.active_channel_configs = [] 
@@ -135,7 +139,7 @@ class DAQControlApp(QWidget):
 
         try:
             dev_name = self.device_cb.currentData()
-            if dev_name:
+            if dev_name and dev_name not in (self.MATH_DEVICE_ID, self.ALL_DEVICES_ID):
                 nidaqmx.system.Device(dev_name).reset_device()
                 do_init = nidaqmx.Task()
                 do_init.do_channels.add_do_chan(self.get_do_channel(), line_grouping=LineGrouping.CHAN_PER_LINE)
@@ -175,7 +179,8 @@ class DAQControlApp(QWidget):
         QTimer.singleShot(0, _show)
 
     def get_default_channel_config(self, raw_name):
-        term = "RSE" if raw_name.startswith("AI") and int(raw_name[2:]) >= 16 else "DIFF"
+        base = self._signal_base_name(raw_name)
+        term = "RSE" if base.startswith("AI") and self._ai_index(base) >= 16 else "DIFF"
         return {
             "custom_name": raw_name, "term": term, "range": "-10 to 10",
             "sensor": "None", "scale": "1.0", "unit": "V", "offset": "0.0",
@@ -183,8 +188,57 @@ class DAQControlApp(QWidget):
             "expression": "AI0 - AI1"
         }
 
-    def get_write_channel(self): return f"{self.device_cb.currentData()}/ao0"
-    def get_do_channel(self): return f"{self.device_cb.currentData()}/port0/line0:1"
+    def _is_math_device_selected(self):
+        return self.device_cb.currentData() == self.MATH_DEVICE_ID
+
+    def _is_all_devices_selected(self):
+        return self.device_cb.currentData() == self.ALL_DEVICES_ID
+
+    def _signal_base_name(self, signal_name):
+        return signal_name.split("@", 1)[0] if "@" in signal_name else signal_name
+
+    def _signal_device_name(self, signal_name):
+        return signal_name.split("@", 1)[1] if "@" in signal_name else None
+
+    def _is_ai_signal(self, signal_name):
+        return self._signal_base_name(signal_name).startswith("AI")
+
+    def _is_ao_signal(self, signal_name):
+        return self._signal_base_name(signal_name).startswith("AO")
+
+    def _ai_index(self, ai_name):
+        digits = "".join(ch for ch in ai_name[2:] if ch.isdigit())
+        return int(digits) if digits else 0
+
+    def _mk_dev_signal(self, device_name, raw_name):
+        return f"{raw_name}@{device_name}"
+
+    def _channels_for_device(self, device_name):
+        ptype = self.device_product_types.get(device_name, "")
+        profile = get_profile(detect_profile_name(ptype, device_name))
+        return [self._mk_dev_signal(device_name, sig) for sig in (profile.ai_channels + profile.ao_channels)]
+
+    def _ensure_signal_state(self, signal_name):
+        if signal_name not in self.master_channel_configs:
+            self.master_channel_configs[signal_name] = self.get_default_channel_config(signal_name)
+        if signal_name not in self.history_data:
+            self.history_data[signal_name] = collections.deque(maxlen=self.history_maxlen)
+
+    def _get_active_hw_device(self):
+        dev_name = self.device_cb.currentData()
+        if dev_name and dev_name not in (self.MATH_DEVICE_ID, self.ALL_DEVICES_ID):
+            return dev_name
+        for i in range(self.device_cb.count()):
+            candidate = self.device_cb.itemData(i)
+            if candidate not in (self.MATH_DEVICE_ID, self.ALL_DEVICES_ID):
+                return candidate
+        return "Dev1"
+
+    def get_write_channel(self):
+        return f"{self._get_active_hw_device()}/ao0"
+
+    def get_do_channel(self):
+        return f"{self._get_active_hw_device()}/port0/line0:1"
 
     def update_ao_state_from_pulse(self, channels, volts):
         for ch in channels:
@@ -193,8 +247,8 @@ class DAQControlApp(QWidget):
                 self.ao_state_dict[raw_sig] = float(volts)
 
     def launch_analog_out(self):
-        device_name = self.device_cb.currentData()
-        active_aos = [s for s in self.available_signals if s.startswith("AO")]
+        device_name = self._get_active_hw_device()
+        active_aos = [self._signal_base_name(s) for s in self.available_signals if self._is_ao_signal(s)]
         if self.ao_window is not None: self.ao_window.close()
         self.ao_window = VoltageToggleWindow(device_name, active_aos, self.update_ao_state_from_pulse)
         self.ao_window.show()
@@ -360,6 +414,7 @@ class DAQControlApp(QWidget):
         current_data = self.device_cb.currentData()
         self.device_cb.clear()
         self.device_product_types = {}
+        self.detected_devices = []
         devs = []
         try:
             sys_local = nidaqmx.system.System.local()
@@ -373,31 +428,59 @@ class DAQControlApp(QWidget):
         idx_to_set = 0
         for i, (name, ptype) in enumerate(devs):
             self.device_product_types[name] = ptype
+            self.detected_devices.append(name)
             self.device_cb.addItem(f"{name} ({ptype})", userData=name)
             if name == current_data:
                 idx_to_set = i
+
+        self.device_cb.addItem("All Devices", userData=self.ALL_DEVICES_ID)
+        self.device_cb.addItem("Math (Virtual)", userData=self.MATH_DEVICE_ID)
 
         if self.device_cb.count() > 0:
             self.device_cb.setCurrentIndex(idx_to_set)
             self.on_device_changed(self.device_cb.currentIndex())
 
     def get_selected_device_profile(self):
+        if self._is_math_device_selected() or self._is_all_devices_selected():
+            return DEFAULT_HARDWARE_PROFILE
+
         dev_name = self.device_cb.currentData() or ""
         product_type = self.device_product_types.get(dev_name, "")
         profile_name = detect_profile_name(product_type, dev_name)
         return get_profile(profile_name)
 
     def apply_selected_device_profile(self):
+        if self._is_math_device_selected():
+            kept_math = [s for s in self.available_signals if s.startswith("MATH")]
+            self.available_signals = kept_math if kept_math else [f"MATH{i}" for i in range(4)]
+            for sig in self.available_signals: self._ensure_signal_state(sig)
+            return
+
+        if self._is_all_devices_selected():
+            valid_hw = set()
+            for dev in self.detected_devices:
+                valid_hw.update(self._channels_for_device(dev))
+            valid_hw.add("DMM")
+            kept_math = [s for s in self.available_signals if s.startswith("MATH")]
+            kept_hw = [s for s in self.available_signals if s in valid_hw]
+            if not kept_hw and self.detected_devices:
+                kept_hw = self._channels_for_device(self.detected_devices[0])
+            self.available_signals = kept_hw + kept_math
+            for sig in self.available_signals: self._ensure_signal_state(sig)
+            return
+
         self.current_hardware_profile = self.get_selected_device_profile()
-        valid_hw = set(self.current_hardware_profile.ai_channels + self.current_hardware_profile.ao_channels + ["DMM"])
+        dev = self.device_cb.currentData()
+        valid_hw = set(self._channels_for_device(dev) + ["DMM"])
 
         # Keep virtual channels, clamp hardware channels to current device profile.
         kept_math = [s for s in self.available_signals if s.startswith("MATH")]
         kept_hw = [s for s in self.available_signals if s in valid_hw]
         if not kept_hw:
-            kept_hw = self.current_hardware_profile.default_enabled_signals.copy()
+            kept_hw = [self._mk_dev_signal(dev, sig) for sig in self.current_hardware_profile.default_enabled_signals]
 
         self.available_signals = kept_hw + kept_math
+        for sig in self.available_signals: self._ensure_signal_state(sig)
 
     def on_device_changed(self, _):
         if not hasattr(self, "config_grid"):
@@ -413,9 +496,29 @@ class DAQControlApp(QWidget):
         self.rebuild_config_tab()
     def open_channel_selector(self):
         self.cache_current_ui_configs()
-        dialog = ChannelSelectionDialog(self.available_signals, self)
+        if self._is_math_device_selected():
+            allowed_signals = [f"MATH{i}" for i in range(4)]
+            active_signals = [s for s in self.available_signals if s.startswith("MATH")]
+        elif self._is_all_devices_selected():
+            allowed_signals = []
+            for dev in self.detected_devices:
+                allowed_signals.extend(self._channels_for_device(dev))
+            allowed_signals.append("DMM")
+            active_signals = [s for s in self.available_signals if s in allowed_signals]
+        else:
+            dev = self.device_cb.currentData()
+            allowed_signals = self._channels_for_device(dev) + ["DMM"]
+            active_signals = [s for s in self.available_signals if s in allowed_signals]
+
+        dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals)
         if dialog.exec_():
-            self.available_signals = dialog.get_selected()
+            selected = dialog.get_selected()
+            if self._is_math_device_selected():
+                self.available_signals = selected
+            else:
+                math_signals = [s for s in self.available_signals if s.startswith("MATH")]
+                self.available_signals = selected + math_signals
+            for sig in self.available_signals: self._ensure_signal_state(sig)
             self.rebuild_config_tab()
             self.apply_config_update()
 
@@ -450,8 +553,8 @@ class DAQControlApp(QWidget):
         b_range = self.batch_range.currentText()
         b_sensor = self.batch_sensor.currentText()
         for ch_ui in self.channel_ui_configs:
-            if ch_ui['name'].startswith("AI"):
-                idx = int(ch_ui['name'][2:])
+            if self._is_ai_signal(ch_ui['name']):
+                idx = self._ai_index(self._signal_base_name(ch_ui['name']))
                 ch_ui['range_cb'].setCurrentText(b_range)
                 ch_ui['sensor_cb'].setCurrentText(b_sensor)
                 if idx >= 16 and b_term == "DIFF": ch_ui['term_cb'].setCurrentText("RSE")
@@ -467,7 +570,7 @@ class DAQControlApp(QWidget):
             return
         try:
             with nidaqmx.Task() as task:
-                dev_prefix = self.device_cb.currentData()
+                dev_prefix = self._get_active_hw_device()
                 term_path = f"{dev_prefix}/{raw_name.lower()}"
                 if sensor_cb.currentText() == "Type K":
                     task.ai_channels.add_ai_thrmcpl_chan(term_path, thermocouple_type=ThermocoupleType.K, cjc_source=CJCSource.BUILT_IN)
@@ -595,24 +698,27 @@ class DAQControlApp(QWidget):
         for col, h in enumerate(headers): self.config_grid.addWidget(QLabel(f"<b>{h}</b>"), 0, col)
 
         row_idx = 1
-        dev_prefix = self.device_cb.currentData()
+        dev_prefix = self._get_active_hw_device()
         import functools
         
-        active_ai = [s for s in self.available_signals if s.startswith("AI")]
+        active_ai = [s for s in self.available_signals if self._is_ai_signal(s)]
         if active_ai:
-            ai_label = QLabel("<b>Analog Inputs (AI)</b>")
+            ai_heading = "Math Device Inputs" if self._is_math_device_selected() else "Analog Inputs (AI)"
+            ai_label = QLabel(f"<b>{ai_heading}</b>")
             ai_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 10px; margin-bottom: 5px;")
             self.config_grid.addWidget(ai_label, row_idx, 0, 1, 12)
             row_idx += 1
 
         for raw_name in self.available_signals:
-            if not raw_name.startswith("AI"): continue
+            if not self._is_ai_signal(raw_name): continue
 
             cfg = self.master_channel_configs[raw_name]
-            ch_label = QLabel(f"{dev_prefix}/{raw_name.lower()} ({raw_name})")
+            base_name = self._signal_base_name(raw_name)
+            dev_name = self._signal_device_name(raw_name) or dev_prefix
+            ch_label = QLabel(f"{dev_name}/{base_name.lower()} ({raw_name})")
             custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
             term_cb = QComboBox()
-            if int(raw_name[2:]) >= 16:
+            if self._ai_index(base_name) >= 16:
                 term_cb.addItems(term_options_high)
                 if cfg.get("term", "RSE") == "DIFF": term_cb.setCurrentText("RSE")
                 else: term_cb.setCurrentText(cfg.get("term", "RSE"))
@@ -665,21 +771,24 @@ class DAQControlApp(QWidget):
             })
             row_idx += 1
 
-        active_ao = [s for s in self.available_signals if s.startswith("AO")]
+        active_ao = [s for s in self.available_signals if self._is_ao_signal(s)]
         if active_ao:
             line = QFrame()
             line.setFrameShape(QFrame.HLine)
             line.setFrameShadow(QFrame.Sunken)
             self.config_grid.addWidget(line, row_idx, 0, 1, 12)
             row_idx += 1
-            ao_label = QLabel("<b>Analog Outputs (AO)</b>")
+            ao_heading = "Math Device Outputs" if self._is_math_device_selected() else "Analog Outputs (AO)"
+            ao_label = QLabel(f"<b>{ao_heading}</b>")
             ao_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
             self.config_grid.addWidget(ao_label, row_idx, 0, 1, 12)
             row_idx += 1
             
             for raw_name in active_ao:
                 cfg = self.master_channel_configs[raw_name]
-                ch_label = QLabel(f"{dev_prefix}/{raw_name.lower()} ({raw_name})")
+                base_name = self._signal_base_name(raw_name)
+                dev_name = self._signal_device_name(raw_name) or dev_prefix
+                ch_label = QLabel(f"{dev_name}/{base_name.lower()} ({raw_name})")
                 custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
                 unit_input = QLineEdit("V")
                 unit_input.setEnabled(False)
@@ -703,7 +812,8 @@ class DAQControlApp(QWidget):
             row_idx += 1
             
             m_lay = QHBoxLayout()
-            m_label = QLabel("<b>Virtual Math Channels</b>")
+            m_title = "Math Device Channels" if self._is_math_device_selected() else "Virtual Math Channels"
+            m_label = QLabel(f"<b>{m_title}</b>")
             m_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
             m_help = QPushButton("Math Help")
             m_help.setStyleSheet("font-weight:bold; background-color:#ffc107;")
@@ -851,6 +961,7 @@ class DAQControlApp(QWidget):
                 self.folder_display.setText(f"Output Folder: ..{self.output_folder[-30:]}")
 
             if "available_signals" in main_cfg: self.available_signals = main_cfg["available_signals"]
+            for sig in self.available_signals: self._ensure_signal_state(sig)
             self.apply_selected_device_profile()
             if "master_channels" in config:
                 for k, v in config["master_channels"].items():
@@ -878,7 +989,7 @@ class DAQControlApp(QWidget):
             try: return (float(r_str.split(" to ")[0]), float(r_str.split(" to ")[1]))
             except: return (-10.0, 10.0)
 
-        dev_prefix = self.device_cb.currentData()
+        dev_prefix = self._get_active_hw_device()
         daq_configs = []
         for ch in self.channel_ui_configs:
             if ch['name'].startswith("MATH"):
@@ -887,11 +998,14 @@ class DAQControlApp(QWidget):
                     'CustomName': ch['custom_name_input'].text().strip() or ch['name'],
                     'Expression': ch['expr_input'].text().strip(),
                     'Unit': ch['unit_input'].text().strip(),
+                    'Kind': 'MATH',
                     'Scale': 1.0, 'Offset': 0.0 
                 })
                 continue
 
             sensor_type = ch['sensor_cb'].currentText() if 'sensor_cb' in ch else "None"
+            base_name = self._signal_base_name(ch['name'])
+            dev_name = self._signal_device_name(ch['name']) or dev_prefix
             try: scale_val = float(ch['scale_input'].text())
             except ValueError: scale_val = 1.0 
             try: offset_val = float(ch['offset_input'].text())
@@ -906,12 +1020,13 @@ class DAQControlApp(QWidget):
             r_cb_text = ch['range_cb'].currentText() if 'range_cb' in ch and ch['range_cb'].count() > 0 else "-10 to 10"
 
             daq_configs.append({
-                'Name': ch['name'], 'Terminal': f"{dev_prefix}/{ch['name'].lower()}",
+                'Name': ch['name'], 'Terminal': f"{dev_name}/{base_name.lower()}",
                 'CustomName': ch['custom_name_input'].text().strip() or ch['name'],
                 'Config': config_map.get(t_cb_text, TerminalConfiguration.RSE),
                 'Range': parse_range(r_cb_text),
                 'SensorType': sensor_type, 'Scale': scale_val,
                 'Unit': ch['unit_input'].text().strip(), 'Offset': offset_val,
+                'Kind': 'AI' if self._is_ai_signal(ch['name']) else 'AO',
                 'LPF_On': lpf_on, 'LPF_Cutoff': lpf_cut, 'LPF_Order': lpf_ord
             })
         return daq_configs
@@ -950,7 +1065,7 @@ class DAQControlApp(QWidget):
         # Multiprocessing setup 
         configs = self.active_channel_configs
         cfg_dict = {c["Name"]: c for c in configs}
-        active_ai_configs = [c for c in configs if c['Name'].startswith("AI")]
+        active_ai_configs = [c for c in configs if c.get('Kind') == 'AI']
         hw_signals = [sig for sig in self.available_signals if not sig.startswith("MATH")]
         math_signals = [sig for sig in self.available_signals if sig.startswith("MATH")]
         
@@ -963,11 +1078,12 @@ class DAQControlApp(QWidget):
         simulate = self.simulate_mode
         has_dmm = "DMM" in self.available_signals
         n_ai = len(active_ai_configs)
-        n_ao = sum(1 for c in configs if c['Name'].startswith("AO"))
+        active_ao_signals = [c['Name'] for c in configs if c.get('Kind') == 'AO']
+        n_ao = len(active_ao_signals)
         
         self.daq_process = mp.Process(target=daq_read_worker, args=(
             self.mp_stop_flag, simulate, read_rate, samples_per_read, active_ai_configs, 
-            n_ai, n_ao, has_dmm, self.available_signals, self.ao_state_dict, self.dmm_buffer_list, 
+            n_ai, n_ao, active_ao_signals, has_dmm, self.available_signals, self.ao_state_dict, self.dmm_buffer_list, 
             self.tdms_queue, self.process_queue))
             
         self.math_process = mp.Process(target=math_processing_worker, args=(
@@ -1002,8 +1118,8 @@ class DAQControlApp(QWidget):
     def tdms_writer_thread_func(self):
         filename = self.generate_filename("raw_data")
         self.current_tdms_filepath = str(filename)
-        active_ai = [s for s in self.available_signals if s.startswith("AI")]
-        active_ao = [s for s in self.available_signals if s.startswith("AO")]
+        active_ai = [s for s in self.available_signals if self._is_ai_signal(s)]
+        active_ao = [s for s in self.available_signals if self._is_ao_signal(s)]
         has_dmm = "DMM" in self.available_signals
 
         try:
@@ -1074,6 +1190,7 @@ class DAQControlApp(QWidget):
                 self.history_time.extend(t_chunk)
                 for sig in self.available_signals:
                     if sig in data_chunk_dict:
+                        self._ensure_signal_state(sig)
                         self.history_data[sig].extend(data_chunk_dict[sig])
                 self.latest_math_values.update(math_vals)
 
