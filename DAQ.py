@@ -216,7 +216,19 @@ class DAQControlApp(QWidget):
 
     def _device_display_name(self, device_name):
         ptype = self.device_product_types.get(device_name, "")
+        if device_name == "Simulated device":
+            return device_name
         return f"{device_name}\\{ptype}" if ptype else device_name
+
+    def _clear_layout_recursive(self, layout):
+        while layout.count():
+            item = layout.takeAt(0)
+            child_widget = item.widget()
+            child_layout = item.layout()
+            if child_layout is not None:
+                self._clear_layout_recursive(child_layout)
+            if child_widget is not None:
+                child_widget.deleteLater()
 
     def _ensure_signal_state(self, signal_name):
         if signal_name not in self.master_channel_configs:
@@ -661,10 +673,7 @@ class DAQControlApp(QWidget):
         dialog.exec_()
 
     def rebuild_config_tab(self):
-        while self.config_grid.count():
-            item = self.config_grid.takeAt(0)
-            widget = item.widget()
-            if widget is not None: widget.deleteLater()
+        self._clear_layout_recursive(self.config_grid)
 
         self.channel_ui_configs = []
         term_options = ["RSE", "NRSE", "DIFF"]
