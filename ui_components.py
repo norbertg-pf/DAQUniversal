@@ -142,6 +142,11 @@ class ChannelSelectionDialog(QDialog):
                 return base, dev
             return sig, None
 
+        def is_simulated(sig):
+            base, dev = split_sig(sig)
+            dev = (dev or "").lower()
+            return dev.startswith("simulated") or "simulated" in dev
+
         def pretty(sig):
             base, dev = split_sig(sig)
             if base == "DMM":
@@ -151,8 +156,8 @@ class ChannelSelectionDialog(QDialog):
                 return f"{dev_disp}/{base.lower()} ({base})"
             return sig
 
-        ai_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AI") or split_sig(sig)[0] == "DMM"]
-        ao_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AO")]
+        ai_signals = [sig for sig in allowed if (split_sig(sig)[0].startswith("AI") or split_sig(sig)[0] == "DMM") and not is_simulated(sig)]
+        ao_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AO") and not is_simulated(sig)]
         math_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("MATH")]
 
         if ai_signals:

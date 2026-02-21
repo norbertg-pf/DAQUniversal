@@ -509,7 +509,8 @@ class DAQControlApp(QWidget):
         else:
             allowed_signals = []
             for dev in self.detected_devices:
-                if dev == "Simulated device":
+                ptype = (self.device_product_types.get(dev, "") or "").lower()
+                if dev.lower().startswith("simulated") or "simulated" in ptype:
                     continue
                 allowed_signals.extend(self._channels_for_device(dev))
             allowed_signals.append("DMM")
