@@ -7,6 +7,18 @@ from nidaqmx.constants import AcquisitionType, CJCSource, ProductCategory, Therm
 import scipy.signal as signal
 
 
+def _base_signal_name(sig_name: str) -> str:
+    return sig_name.split("@", 1)[0] if "@" in sig_name else sig_name
+
+
+def _qualified_eval_alias(sig_name: str) -> str:
+    if "@" not in sig_name:
+        return sig_name
+    base, dev = sig_name.split("@", 1)
+    safe_dev = "".join(ch if ch.isalnum() else "_" for ch in dev)
+    return f"{base}__{safe_dev}"
+
+
 def get_terminal_name_with_dev_prefix(task: nidaqmx.Task, terminal_name: str) -> str:
     for device in task.devices:
         if device.product_category not in [ProductCategory.C_SERIES_MODULE, ProductCategory.SCXI_MODULE]:
@@ -17,14 +29,36 @@ def get_terminal_name_with_dev_prefix(task: nidaqmx.Task, terminal_name: str) ->
 # MULTIPROCESSING WORKERS (Runs on separate CPU Cores)
 # =============================================================================
 
-def daq_read_worker(stop_event, simulate, read_rate, samples_per_read, active_ai_configs, 
-                    n_ai, n_ao, has_dmm, available_signals, ao_state_dict, dmm_buffer_list, 
+def daq_read_worker(stop_event, simulate, read_rate, samples_per_read, active_ai_configs,
+                    n_ai, n_ao, active_ao_signals, has_dmm, available_signals, ao_state_dict, dmm_buffer_list,
                     tdms_q, process_q):
     """ Runs on Core 2: Handles hardware communication and pulls raw arrays. """
     sample_nr = 0
     safe_timeout = (samples_per_read / read_rate) + 2.0
-    task = None
-    stream_reader = None
+    tasks = []
+    readers = []
+    ai_grouped = []
+
+    def build_ao_chunk():
+        if n_ao <= 0:
+            return np.empty((0, samples_per_read))
+        ao_vals = np.array([ao_state_dict.get(sig, 0.0) for sig in active_ao_signals], dtype=np.float64)
+        return np.repeat(ao_vals[:, None], samples_per_read, axis=1)
+
+    def build_dmm_chunk():
+        if not has_dmm:
+            return np.empty((0, samples_per_read))
+        dmm_data = np.asarray(list(dmm_buffer_list))
+        del dmm_buffer_list[:]
+        if len(dmm_data) == 0:
+            dmm_chunk = np.zeros(samples_per_read)
+        elif len(dmm_data) < samples_per_read:
+            reps = samples_per_read // len(dmm_data)
+            dmm_chunk = np.concatenate([np.repeat(dmm_data, reps), np.repeat(dmm_data[-1], samples_per_read - len(dmm_data) * reps)])
+        else:
+            idx = np.linspace(0, len(dmm_data), samples_per_read + 1, endpoint=True).astype(int)
+            dmm_chunk = np.array([dmm_data[idx[i]:idx[i+1]].mean() if len(dmm_data[idx[i]:idx[i+1]]) > 0 else 0.0 for i in range(samples_per_read)])
+        return dmm_chunk.reshape(1, -1)
 
     try:
         if simulate:
@@ -33,117 +67,100 @@ def daq_read_worker(stop_event, simulate, read_rate, samples_per_read, active_ai
                 t_start = time.time()
                 time_arr = np.linspace(t_wave, t_wave + samples_per_read/read_rate, samples_per_read, endpoint=False)
                 t_wave += samples_per_read/read_rate
-                
+
                 if n_ai > 0:
                     ai_data = np.random.uniform(-0.1, 0.1, (n_ai, samples_per_read))
-                    ai_data[0, :] += np.sin(2 * np.pi * 50 * time_arr) * 2.0  
+                    ai_data[0, :] += np.sin(2 * np.pi * 50 * time_arr) * 2.0
                     for i, cfg in enumerate(active_ai_configs):
                         if cfg.get('SensorType') == "Type K":
                             ai_data[i, :] = np.random.uniform(24.5, 25.5, samples_per_read)
                     raw_ai_tdms = ai_data.copy()
                 else:
-                    ai_data = raw_ai_tdms = np.empty((0, samples_per_read))
+                    raw_ai_tdms = np.empty((0, samples_per_read))
 
-                if n_ao > 0:
-                    active_ao_signals = sorted([s for s in available_signals if s.startswith("AO")], key=lambda x: int(x[2:]))
-                    ao_vals = np.array([ao_state_dict.get(sig, 0.0) for sig in active_ao_signals])
-                    ao_chunk = np.repeat(ao_vals[:, None], samples_per_read, axis=1)
-                else: ao_chunk = np.empty((0, samples_per_read))
-
-                # Handle DMM from shared list
-                if has_dmm: 
-                    dmm_data = np.asarray(list(dmm_buffer_list))
-                    del dmm_buffer_list[:] # clear buffer
-                    if len(dmm_data) == 0: dmm_chunk = np.zeros(samples_per_read)
-                    elif len(dmm_data) < samples_per_read:
-                        dmm_chunk = np.concatenate([np.repeat(dmm_data, samples_per_read // len(dmm_data)), np.repeat(dmm_data[-1], samples_per_read - len(dmm_data)* (samples_per_read // len(dmm_data)))])
-                    else:
-                        idx = np.linspace(0, len(dmm_data), samples_per_read+1, endpoint=True).astype(int)
-                        dmm_chunk = np.array([dmm_data[idx[i]:idx[i+1]].mean() if len(dmm_data[idx[i]:idx[i+1]]) > 0 else dmm_chunk[-1] for i in range(samples_per_read)])
-                    dmm_chunk = dmm_chunk.reshape(1, -1)
-                else: dmm_chunk = np.empty((0, samples_per_read))
-                
+                ao_chunk = build_ao_chunk()
+                dmm_chunk = build_dmm_chunk()
                 global_time = (sample_nr + np.arange(samples_per_read)) / read_rate
-                
-                try: tdms_q.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
-                except queue.Full: pass 
-                
+
+                try:
+                    tdms_q.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
+                except queue.Full:
+                    pass
+
                 data_to_process = np.vstack((raw_ai_tdms, ao_chunk, dmm_chunk)) if len(available_signals) > 0 else np.empty((0, samples_per_read))
-                try: process_q.put_nowait((global_time, data_to_process))
-                except queue.Full: pass 
-                
+                try:
+                    process_q.put_nowait((global_time, data_to_process))
+                except queue.Full:
+                    pass
+
                 sample_nr += samples_per_read
                 elapsed = time.time() - t_start
-                if (samples_per_read / read_rate) - elapsed > 0: time.sleep((samples_per_read / read_rate) - elapsed)
+                if (samples_per_read / read_rate) - elapsed > 0:
+                    time.sleep((samples_per_read / read_rate) - elapsed)
             return
 
-        # Real Hardware Setup
-        ai_data = np.zeros((n_ai, samples_per_read), dtype=np.float64) if n_ai > 0 else np.empty((0, samples_per_read))
         if n_ai > 0:
-            task = nidaqmx.Task()
-            for ch in active_ai_configs:
-                channel_name = ch.get('Terminal', '<unknown channel>')
-                if ch.get('SensorType') == "Type K":
-                    try:
-                        task.ai_channels.add_ai_thrmcpl_chan(
-                            channel_name,
-                            thermocouple_type=ThermocoupleType.K,
-                            cjc_source=CJCSource.BUILT_IN,
-                        )
-                    except Exception as e:
-                        print(f"[ERROR] Failed to configure thermocouple channel '{channel_name}': {e}")
-                        raise RuntimeError(f"Invalid thermocouple configuration for channel '{channel_name}'") from e
-                else: 
-                    task.ai_channels.add_ai_voltage_chan(channel_name, terminal_config=ch['Config'], min_val=ch['Range'][0], max_val=ch['Range'][1])
-            task.timing.cfg_samp_clk_timing(rate=read_rate, sample_mode=AcquisitionType.CONTINUOUS, samps_per_chan=int(read_rate * 10))
-            stream_reader = stream_readers.AnalogMultiChannelReader(task.in_stream)
-            task.start()
+            by_terminal = {}
+            for cfg in active_ai_configs:
+                term = cfg.get('Terminal', '')
+                dev = term.split('/', 1)[0] if '/' in term else ''
+                by_terminal.setdefault(dev, []).append(cfg)
+
+            for dev in sorted(by_terminal.keys()):
+                cfgs = by_terminal[dev]
+                task = nidaqmx.Task()
+                for ch in cfgs:
+                    channel_name = ch.get('Terminal', '<unknown channel>')
+                    if ch.get('SensorType') == "Type K":
+                        task.ai_channels.add_ai_thrmcpl_chan(channel_name, thermocouple_type=ThermocoupleType.K, cjc_source=CJCSource.BUILT_IN)
+                    else:
+                        task.ai_channels.add_ai_voltage_chan(channel_name, terminal_config=ch['Config'], min_val=ch['Range'][0], max_val=ch['Range'][1])
+                task.timing.cfg_samp_clk_timing(rate=read_rate, sample_mode=AcquisitionType.CONTINUOUS, samps_per_chan=int(read_rate * 10))
+                reader = stream_readers.AnalogMultiChannelReader(task.in_stream)
+                task.start()
+                tasks.append(task)
+                readers.append(reader)
+                ai_grouped.append((cfgs, np.zeros((len(cfgs), samples_per_read), dtype=np.float64)))
 
         while not stop_event.is_set():
             try:
-                if task is not None:
-                    stream_reader.read_many_sample(data=ai_data, number_of_samples_per_channel=samples_per_read, timeout=safe_timeout)
-                    raw_ai_tdms = ai_data.copy()
+                if readers:
+                    ai_chunks = []
+                    for reader, (_, buf) in zip(readers, ai_grouped):
+                        reader.read_many_sample(data=buf, number_of_samples_per_channel=samples_per_read, timeout=safe_timeout)
+                        ai_chunks.append(buf.copy())
+                    raw_ai_tdms = np.vstack(ai_chunks) if ai_chunks else np.empty((0, samples_per_read))
                 else:
                     time.sleep(samples_per_read / read_rate)
-                    raw_ai_tdms = ai_data
-            except Exception: continue
+                    raw_ai_tdms = np.empty((0, samples_per_read))
+            except Exception:
+                continue
 
-            if n_ao > 0:
-                active_ao_signals = sorted([s for s in available_signals if s.startswith("AO")], key=lambda x: int(x[2:]))
-                ao_vals = np.array([ao_state_dict.get(sig, 0.0) for sig in active_ao_signals])
-                ao_chunk = np.repeat(ao_vals[:, None], samples_per_read, axis=1)
-            else: ao_chunk = np.empty((0, samples_per_read))
-
-            if has_dmm: 
-                dmm_data = np.asarray(list(dmm_buffer_list))
-                del dmm_buffer_list[:] 
-                if len(dmm_data) == 0: dmm_chunk = np.zeros(samples_per_read)
-                elif len(dmm_data) < samples_per_read:
-                    dmm_chunk = np.concatenate([np.repeat(dmm_data, samples_per_read // len(dmm_data)), np.repeat(dmm_data[-1], samples_per_read - len(dmm_data)* (samples_per_read // len(dmm_data)))])
-                else:
-                    idx = np.linspace(0, len(dmm_data), samples_per_read+1, endpoint=True).astype(int)
-                    dmm_chunk = np.array([dmm_data[idx[i]:idx[i+1]].mean() if len(dmm_data[idx[i]:idx[i+1]]) > 0 else dmm_chunk[-1] for i in range(samples_per_read)])
-                dmm_chunk = dmm_chunk.reshape(1, -1)
-            else: dmm_chunk = np.empty((0, samples_per_read))
-
+            ao_chunk = build_ao_chunk()
+            dmm_chunk = build_dmm_chunk()
             global_time = (sample_nr + np.arange(samples_per_read)) / read_rate
-            
-            try: tdms_q.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
-            except queue.Full: pass
-            
+
+            try:
+                tdms_q.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
+            except queue.Full:
+                pass
+
             data_to_process = np.vstack((raw_ai_tdms, ao_chunk, dmm_chunk))
-            try: process_q.put_nowait((global_time, data_to_process))
-            except queue.Full: pass
+            try:
+                process_q.put_nowait((global_time, data_to_process))
+            except queue.Full:
+                pass
 
             sample_nr += samples_per_read
 
-    except Exception as e: print(f"[ERROR] read_voltages process crashed: {e}")
+    except Exception as e:
+        print(f"[ERROR] read_voltages process crashed: {e}")
     finally:
-        if task is not None:
-            try: task.stop(); task.close()
-            except: pass
-
+        for task in tasks:
+            try:
+                task.stop(); task.close()
+            except Exception:
+                pass
 def math_processing_worker(stop_event, rate, average_samples, available_signals, 
                            hw_signals, math_signals, cfg_dict, process_q, gui_q):
     """ Runs on Core 3: Handles high-speed math, Butterworth filtering, and averaging """
@@ -189,6 +206,10 @@ def math_processing_worker(stop_event, rate, average_samples, available_signals,
             processed_row = (row * scale) - offset
             processed_chunk[i, :] = processed_row
             eval_dict[sig] = processed_row
+            base_name = _base_signal_name(sig)
+            if base_name not in eval_dict:
+                eval_dict[base_name] = processed_row
+            eval_dict[_qualified_eval_alias(sig)] = processed_row
 
         # VIRTUAL MATH
         eval_dict['np'] = np

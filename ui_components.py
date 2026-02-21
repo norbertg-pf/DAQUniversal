@@ -42,7 +42,7 @@ class GDriveHelpDialog(QDialog):
         self.setMinimumHeight(450)
         layout = QVBoxLayout(self)
         
-        text = """
+        text = f"""
         <h3 style="color: #0055a4;">How to use the Google Drive Auto-Uploader</h3>
         <b>1. The 'auth' Folder (Security)</b><br>
         The software will automatically create an <b>auth</b> folder in your project directory. 
@@ -83,18 +83,24 @@ class GDriveHelpDialog(QDialog):
         layout.addWidget(close_btn)
 
 class MathHelpDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, available_vars=None):
         super().__init__(parent)
         self.setWindowTitle("Virtual Math Channels - Help")
         self.setMinimumWidth(500)
         layout = QVBoxLayout(self)
+
+        vars_list = sorted(set(available_vars or []))
+        vars_text = ", ".join(vars_list[:20]) if vars_list else "AI0, AI1, DMM"
         
-        text = """
+        text = f"""
         <h3 style="color: #0055a4;">Using Virtual Math Channels</h3>
         Math channels let you compute values in real-time using your active Analog Inputs.
         <br><br>
         <b>How to write expressions:</b><br>
-        Use the EXACT raw channel names (e.g., <b>AI0</b>, <b>AI5</b>, <b>DMM</b>) in your formula. Do NOT use your custom names.
+        Use the EXACT base channel names (e.g., <b>AI0</b>, <b>AI5</b>, <b>DMM</b>) in your formula. Do NOT use your custom names.
+        <br><br>
+        <b>Currently available variables:</b><br>
+        <code>{vars_text}</code>
         <br><br>
         <b>Examples:</b><br>
         • Voltage Difference: <code>AI0 - AI1</code><br>
@@ -122,59 +128,89 @@ class MathHelpDialog(QDialog):
 # =============================================================================
 
 class ChannelSelectionDialog(QDialog):
-    def __init__(self, active_signals, parent=None):
+    def __init__(self, active_signals, parent=None, allowed_signals=None):
         super().__init__(parent)
         self.setWindowTitle("Select Active Channels")
         self.setMinimumWidth(800)
         layout = QVBoxLayout(self)
         self.checkboxes = {}
-        
-        ai_group = QGroupBox("Analog Inputs (AI)")
-        ai_layout = QGridLayout()
-        r, c = 0, 0
-        for sig in ALL_AI_CHANNELS:
-            cb = QCheckBox(sig)
-            cb.setChecked(sig in active_signals)
-            self.checkboxes[sig] = cb
-            ai_layout.addWidget(cb, r, c)
-            c += 1
-            if c > 7:  c = 0; r += 1
-        ai_group.setLayout(ai_layout)
-        layout.addWidget(ai_group)
-        
-        ao_group = QGroupBox("Analog Outputs (AO)")
-        ao_layout = QGridLayout()
-        r, c = 0, 0
-        for sig in ALL_AO_CHANNELS:
-            cb = QCheckBox(sig)
-            cb.setChecked(sig in active_signals)
-            self.checkboxes[sig] = cb
-            ao_layout.addWidget(cb, r, c)
-            c += 1
-        ao_group.setLayout(ao_layout)
-        layout.addWidget(ao_group)
+        allowed = list(allowed_signals) if allowed_signals is not None else list(ALL_CHANNELS)
 
-        math_group = QGroupBox("Virtual Math Channels")
-        math_layout = QGridLayout()
-        r, c = 0, 0
-        for sig in ALL_MATH_CHANNELS:
-            cb = QCheckBox(sig)
-            cb.setChecked(sig in active_signals)
-            self.checkboxes[sig] = cb
-            math_layout.addWidget(cb, r, c)
-            c += 1
-        math_group.setLayout(math_layout)
-        layout.addWidget(math_group)
-        
-        dmm_group = QGroupBox("External Devices")
-        dmm_layout = QVBoxLayout()
-        cb = QCheckBox("DMM")
-        cb.setChecked("DMM" in active_signals)
-        self.checkboxes["DMM"] = cb
-        dmm_layout.addWidget(cb)
-        dmm_group.setLayout(dmm_layout)
-        layout.addWidget(dmm_group)
-        
+        def split_sig(sig):
+            if "@" in sig:
+                base, dev = sig.split("@", 1)
+                return base, dev
+            return sig, None
+
+        def pretty(sig):
+            base, dev = split_sig(sig)
+            if dev:
+                dev_disp = parent._device_display_name(dev) if parent and hasattr(parent, "_device_display_name") else dev
+                return f"{dev_disp}/{base.lower()} ({base})"
+            return sig
+
+        ai_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AI")]
+        ao_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AO")]
+        math_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("MATH")]
+
+        if ai_signals:
+            ai_group = QGroupBox("Analog Inputs (AI)")
+            ai_layout = QGridLayout()
+            r, c = 0, 0
+            for sig in ai_signals:
+                cb = QCheckBox(pretty(sig))
+                cb.setChecked(sig in active_signals)
+                self.checkboxes[sig] = cb
+                ai_layout.addWidget(cb, r, c)
+                c += 1
+                if c > 3:
+                    c = 0
+                    r += 1
+            ai_group.setLayout(ai_layout)
+            layout.addWidget(ai_group)
+
+        if ao_signals:
+            ao_group = QGroupBox("Analog Outputs (AO)")
+            ao_layout = QGridLayout()
+            r, c = 0, 0
+            for sig in ao_signals:
+                cb = QCheckBox(pretty(sig))
+                cb.setChecked(sig in active_signals)
+                self.checkboxes[sig] = cb
+                ao_layout.addWidget(cb, r, c)
+                c += 1
+                if c > 3:
+                    c = 0
+                    r += 1
+            ao_group.setLayout(ao_layout)
+            layout.addWidget(ao_group)
+
+        if math_signals:
+            math_group = QGroupBox("Virtual Math Channels")
+            math_layout = QGridLayout()
+            r, c = 0, 0
+            for sig in math_signals:
+                cb = QCheckBox(pretty(sig))
+                cb.setChecked(sig in active_signals)
+                self.checkboxes[sig] = cb
+                math_layout.addWidget(cb, r, c)
+                c += 1
+                if c > 3:
+                    c = 0
+                    r += 1
+            math_group.setLayout(math_layout)
+            layout.addWidget(math_group)
+
+        if "DMM" in allowed:
+            dmm_group = QGroupBox("External Devices")
+            dmm_layout = QVBoxLayout()
+            cb = QCheckBox("DMM")
+            cb.setChecked("DMM" in active_signals)
+            self.checkboxes["DMM"] = cb
+            dmm_layout.addWidget(cb)
+            dmm_group.setLayout(dmm_layout)
+            layout.addWidget(dmm_group)
+
         btns = QHBoxLayout()
         ok_btn = QPushButton("Apply Configuration")
         ok_btn.setStyleSheet("font-weight: bold; background-color: #0078D7; color: white; padding: 5px;")
@@ -184,10 +220,7 @@ class ChannelSelectionDialog(QDialog):
         layout.addLayout(btns)
 
     def get_selected(self):
-        selected = []
-        for sig in ALL_CHANNELS:
-            if sig in self.checkboxes and self.checkboxes[sig].isChecked(): selected.append(sig)
-        return selected
+        return [sig for sig, cb in self.checkboxes.items() if cb.isChecked()]
 
 class ExportDialog(QDialog):
     def __init__(self, parent=None):
