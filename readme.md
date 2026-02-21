@@ -16,6 +16,25 @@ The DAQ channel layout is profile-driven and selected automatically from the cho
 
 If you add support for a new NI card, add its profile and aliases in `hardware_profiles.py`.
 
+## Keithley 6510 (single-channel DMM) integration
+
+The Keithley 6510 is integrated as an **external DMM channel** (`DMM`) and is available as a dedicated virtual device entry (`Keithley 6510 (DMM)`) in the DAQ dropdown.
+
+Current behavior:
+
+- NI devices are discovered from NI-DAQmx and shown in the DAQ device dropdown.
+- The Keithley value is read separately over VISA (`pyvisa`) and appended as the `DMM` signal.
+- In the channel selector, you can enable `DMM` as one channel alongside NI signals.
+- In **Channel Config**, the `DMM` channel supports AI-like processing fields: custom name, scale, unit, offset, and LPF settings.
+
+How to use:
+
+1. Connect the instrument over LAN/USB/GPIB and ensure VISA can see it.
+2. In the app, configure the DMM connection settings in the **External Devices** section.
+3. Open channel selection and enable the `DMM` signal.
+
+The Keithley entry is virtual (not NI-DAQmx-enumerated hardware), so NI physical devices and the Keithley mode are intentionally handled through different acquisition paths.
+
 ## Build standalone Windows `.exe` (PyInstaller)
 
 A one-file PyInstaller spec is included as `DAQ_ui.spec`.

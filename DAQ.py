@@ -54,6 +54,7 @@ from ui_components import (
 
 class DAQControlApp(QWidget):
     MATH_DEVICE_ID = "__MATH_DEVICE__"
+    DMM_DEVICE_ID = "__DMM_DEVICE__"
 
     def __init__(self):
         super().__init__()
@@ -189,6 +190,9 @@ class DAQControlApp(QWidget):
 
     def _is_math_device_selected(self):
         return self.device_cb.currentData() == self.MATH_DEVICE_ID
+
+    def _is_dmm_device_selected(self):
+        return self.device_cb.currentData() == self.DMM_DEVICE_ID
 
     def _signal_base_name(self, signal_name):
         return signal_name.split("@", 1)[0] if "@" in signal_name else signal_name
@@ -448,14 +452,20 @@ class DAQControlApp(QWidget):
             if name == current_data:
                 idx_to_set = i
 
+        self.device_cb.addItem("Keithley 6510 (DMM)", userData=self.DMM_DEVICE_ID)
         self.device_cb.addItem("Math (Virtual)", userData=self.MATH_DEVICE_ID)
 
+        if current_data == self.DMM_DEVICE_ID:
+            idx_to_set = self.device_cb.findData(self.DMM_DEVICE_ID)
+        elif current_data == self.MATH_DEVICE_ID:
+            idx_to_set = self.device_cb.findData(self.MATH_DEVICE_ID)
+
         if self.device_cb.count() > 0:
-            self.device_cb.setCurrentIndex(idx_to_set)
+            self.device_cb.setCurrentIndex(max(0, idx_to_set))
             self.on_device_changed(self.device_cb.currentIndex())
 
     def get_selected_device_profile(self):
-        if self._is_math_device_selected():
+        if self._is_math_device_selected() or self._is_dmm_device_selected():
             return DEFAULT_HARDWARE_PROFILE
 
         dev_name = self.device_cb.currentData() or ""
@@ -464,16 +474,22 @@ class DAQControlApp(QWidget):
         return get_profile(profile_name)
 
     def apply_selected_device_profile(self):
-        valid_hw = set()
-        for dev in self.detected_devices:
-            valid_hw.update(self._channels_for_device(dev))
-        valid_hw.add("DMM")
+        if self._is_dmm_device_selected():
+            valid_hw = {"DMM"}
+        else:
+            valid_hw = set()
+            for dev in self.detected_devices:
+                valid_hw.update(self._channels_for_device(dev))
+            valid_hw.add("DMM")
 
         kept_math = [s for s in self.available_signals if s.startswith("MATH")]
         kept_hw = [s for s in self.available_signals if s in valid_hw]
+        if self._is_dmm_device_selected() and "DMM" not in kept_hw:
+            kept_hw = ["DMM"]
 
         self.available_signals = kept_hw + kept_math
-        for sig in self.available_signals: self._ensure_signal_state(sig)
+        for sig in self.available_signals:
+            self._ensure_signal_state(sig)
 
     def on_device_changed(self, _):
         if not hasattr(self, "config_grid"):
@@ -484,7 +500,7 @@ class DAQControlApp(QWidget):
             return
         for ch in getattr(self, "channel_ui_configs", []):
             raw_name = ch['name']
-            if not raw_name.startswith("MATH"):
+            if not raw_name.startswith("MATH") and raw_name != "DMM":
                 base_name = self._signal_base_name(raw_name)
                 dev_name = self._signal_device_name(raw_name) or new_device
                 ch['ch_label'].setText(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
@@ -494,6 +510,9 @@ class DAQControlApp(QWidget):
         if self._is_math_device_selected():
             allowed_signals = [f"MATH{i}" for i in range(4)]
             active_signals = [s for s in self.available_signals if s.startswith("MATH")]
+        elif self._is_dmm_device_selected():
+            allowed_signals = ["DMM"]
+            active_signals = [s for s in self.available_signals if s == "DMM"]
         else:
             allowed_signals = []
             for dev in self.detected_devices:
@@ -771,6 +790,61 @@ class DAQControlApp(QWidget):
             })
             row_idx += 1
 
+        if "DMM" in self.available_signals:
+            if active_ai:
+                line = QFrame()
+                line.setFrameShape(QFrame.HLine)
+                line.setFrameShadow(QFrame.Sunken)
+                self.config_grid.addWidget(line, row_idx, 0, 1, 12)
+                row_idx += 1
+
+            dmm_label = QLabel("<b>External DMM</b>")
+            dmm_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
+            self.config_grid.addWidget(dmm_label, row_idx, 0, 1, 12)
+            row_idx += 1
+
+            cfg = self.master_channel_configs["DMM"]
+            ch_label = QLabel("DMM")
+            custom_name_input = QLineEdit(cfg.get("custom_name", "DMM"))
+
+            term_cb = QComboBox()
+            range_cb = QComboBox()
+            sensor_cb = QComboBox()
+            zero_btn = QPushButton("—")
+            zero_btn.setEnabled(False)
+
+            scale_input = QLineEdit(cfg.get("scale", "1.0"))
+            unit_input = QLineEdit(cfg.get("unit", "V"))
+            offset_input = QLineEdit(cfg.get("offset", "0.0"))
+
+            lpf_cb = QCheckBox()
+            lpf_cb.setChecked(cfg.get("lpf_on", False))
+            lpf_cut = QLineEdit(cfg.get("lpf_cutoff", "10.0"))
+            lpf_ord = QComboBox()
+            lpf_ord.addItems(["2", "4", "6"])
+            lpf_ord.setCurrentText(str(cfg.get("lpf_order", "4")))
+
+            self.config_grid.addWidget(ch_label, row_idx, 0)
+            self.config_grid.addWidget(custom_name_input, row_idx, 1)
+            self.config_grid.addWidget(term_cb, row_idx, 2)
+            self.config_grid.addWidget(range_cb, row_idx, 3)
+            self.config_grid.addWidget(sensor_cb, row_idx, 4)
+            self.config_grid.addWidget(scale_input, row_idx, 5)
+            self.config_grid.addWidget(unit_input, row_idx, 6)
+            self.config_grid.addWidget(offset_input, row_idx, 7)
+            self.config_grid.addWidget(zero_btn, row_idx, 8)
+            self.config_grid.addWidget(lpf_cb, row_idx, 9, alignment=Qt.AlignCenter)
+            self.config_grid.addWidget(lpf_cut, row_idx, 10)
+            self.config_grid.addWidget(lpf_ord, row_idx, 11)
+
+            self.channel_ui_configs.append({
+                "name": "DMM", "ch_label": ch_label, "custom_name_input": custom_name_input,
+                "term_cb": term_cb, "range_cb": range_cb, "sensor_cb": sensor_cb,
+                "scale_input": scale_input, "unit_input": unit_input, "offset_input": offset_input,
+                "lpf_cb": lpf_cb, "lpf_cut": lpf_cut, "lpf_ord": lpf_ord
+            })
+            row_idx += 1
+
         active_ao = [s for s in self.available_signals if self._is_ao_signal(s)]
         if active_ao:
             line = QFrame()
@@ -850,7 +924,7 @@ class DAQControlApp(QWidget):
             raw, custom = cfg['Name'], cfg['CustomName']
             ind_mapping.append((raw, custom))
             sub_mapping.append((raw, f"{custom} ({raw})"))
-        if "DMM" in self.available_signals:
+        if "DMM" in self.available_signals and all(cfg["Name"] != "DMM" for cfg in self.active_channel_configs):
             ind_mapping.append(("DMM", "DMM"))
             sub_mapping.append(("DMM", "DMM (DMM)"))
         for sub in self.subplot_widgets: sub.update_mapping(sub_mapping)
@@ -869,7 +943,7 @@ class DAQControlApp(QWidget):
     def add_indicator(self, default_signal="AI0", default_type="Current (100ms avg)"):
         ind_mapping = []
         for cfg in self.active_channel_configs: ind_mapping.append((cfg['Name'], cfg['CustomName']))
-        if "DMM" in self.available_signals: ind_mapping.append(("DMM", "DMM"))
+        if "DMM" in self.available_signals and all(cfg["Name"] != "DMM" for cfg in self.active_channel_configs): ind_mapping.append(("DMM", "DMM"))
         widget = NumericalIndicatorWidget(ind_mapping, self.remove_indicator)
         idx = widget.signal_cb.findData(default_signal)
         if idx >= 0: widget.signal_cb.setCurrentIndex(idx)
@@ -886,7 +960,7 @@ class DAQControlApp(QWidget):
         idx = len(self.subplot_widgets)
         sub_mapping = []
         for cfg in self.active_channel_configs: sub_mapping.append((cfg['Name'], f"{cfg['CustomName']} ({cfg['Name']})"))
-        if "DMM" in self.available_signals: sub_mapping.append(("DMM", "DMM (DMM)"))
+        if "DMM" in self.available_signals and all(cfg["Name"] != "DMM" for cfg in self.active_channel_configs): sub_mapping.append(("DMM", "DMM (DMM)"))
         widget = SubplotConfigWidget(idx, sub_mapping, self.remove_subplot, self.flag_plot_rebuild)
         if default_signals: widget.set_selected_signals(default_signals)
         self.plot_scroll_layout.insertWidget(len(self.subplot_widgets), widget)
@@ -1017,14 +1091,26 @@ class DAQControlApp(QWidget):
             t_cb_text = ch['term_cb'].currentText() if 'term_cb' in ch and ch['term_cb'].count() > 0 else "RSE"
             r_cb_text = ch['range_cb'].currentText() if 'range_cb' in ch and ch['range_cb'].count() > 0 else "-10 to 10"
 
+            if ch['name'] == 'DMM':
+                kind = 'DMM'
+                terminal = 'DMM'
+                cfg_value = None
+                range_value = (-10.0, 10.0)
+                sensor_type = 'None'
+            else:
+                kind = 'AI' if self._is_ai_signal(ch['name']) else 'AO'
+                terminal = f"{dev_name}/{base_name.lower()}"
+                cfg_value = config_map.get(t_cb_text, TerminalConfiguration.RSE)
+                range_value = parse_range(r_cb_text)
+
             daq_configs.append({
-                'Name': ch['name'], 'Terminal': f"{dev_name}/{base_name.lower()}",
+                'Name': ch['name'], 'Terminal': terminal,
                 'CustomName': ch['custom_name_input'].text().strip() or ch['name'],
-                'Config': config_map.get(t_cb_text, TerminalConfiguration.RSE),
-                'Range': parse_range(r_cb_text),
+                'Config': cfg_value,
+                'Range': range_value,
                 'SensorType': sensor_type, 'Scale': scale_val,
                 'Unit': ch['unit_input'].text().strip(), 'Offset': offset_val,
-                'Kind': 'AI' if self._is_ai_signal(ch['name']) else 'AO',
+                'Kind': kind,
                 'LPF_On': lpf_on, 'LPF_Cutoff': lpf_cut, 'LPF_Order': lpf_ord
             })
         return daq_configs
@@ -1203,8 +1289,10 @@ class DAQControlApp(QWidget):
         current_configs = self.active_channel_configs
         units = {cfg["Name"]: cfg["Unit"] for cfg in current_configs}
         custom_names = {cfg["Name"]: cfg["CustomName"] for cfg in current_configs}
-        units["DMM"] = "V" 
-        custom_names["DMM"] = "DMM"
+        if "DMM" not in units:
+            units["DMM"] = "V"
+        if "DMM" not in custom_names:
+            custom_names["DMM"] = "DMM"
         
         math_sigs = set()
         for ind in self.indicator_widgets:
