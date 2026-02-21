@@ -507,12 +507,18 @@ class DAQControlApp(QWidget):
         self.rebuild_config_tab()
     def open_channel_selector(self):
         self.cache_current_ui_configs()
+        selected_device = self.device_cb.currentData()
         if self._is_math_device_selected():
             allowed_signals = [f"MATH{i}" for i in range(4)]
             active_signals = [s for s in self.available_signals if s.startswith("MATH")]
+        elif selected_device == self.DMM_DEVICE_ID:
+            allowed_signals = [self.DMM_SIGNAL_NAME]
+            active_signals = [s for s in self.available_signals if s == self.DMM_SIGNAL_NAME]
         else:
             allowed_signals = []
             for dev in self.detected_devices:
+                if dev == self.DMM_DEVICE_ID:
+                    continue
                 allowed_signals.extend(self._channels_for_device(dev))
             active_signals = [s for s in self.available_signals if s in allowed_signals]
 
