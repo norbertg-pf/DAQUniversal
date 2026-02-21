@@ -24,6 +24,8 @@ Current behavior:
 
 - NI devices are discovered from NI-DAQmx and shown in the DAQ device dropdown.
 - The Keithley value is read separately over VISA (`pyvisa`) and appended as the `DMM` signal.
+- `DMM` can be selected together with NI AI/AO channels for simultaneous acquisition.
+- Since Keithley data is ~100 Hz, samples are duplicated (zero-order hold) to match the higher NI sample stream when building each DAQ chunk.
 - In the channel selector, you can enable `DMM` as one channel alongside NI signals.
 - In **Channel Config**, the `DMM` channel supports AI-like processing fields: custom name, scale, unit, offset, and LPF settings.
 

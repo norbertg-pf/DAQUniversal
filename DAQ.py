@@ -1168,7 +1168,7 @@ class DAQControlApp(QWidget):
         self.daq_process = mp.Process(target=daq_read_worker, args=(
             self.mp_stop_flag, simulate, read_rate, samples_per_read, active_ai_configs, 
             n_ai, n_ao, active_ao_signals, has_dmm, self.available_signals, self.ao_state_dict, self.dmm_buffer_list, 
-            self.tdms_queue, self.process_queue))
+            self.tdms_queue, self.process_queue, 100.0))
             
         self.math_process = mp.Process(target=math_processing_worker, args=(
             self.mp_stop_flag, read_rate, average_samples, self.available_signals, 
@@ -1239,18 +1239,18 @@ class DAQControlApp(QWidget):
         if self.simulate_mode:
             while not self.mp_stop_flag.is_set():
                 self.dmm_buffer_list.append(float(np.random.uniform(-0.1, 0.1)))
-                time.sleep(0.1)
+                time.sleep(0.01)
             return
 
         inst = None
         try:
-            inst = DMM6510readout.write_script_to_Keithley(self.Keithley_DMM_IP.text(), "0.05")
+            inst = DMM6510readout.write_script_to_Keithley(self.Keithley_DMM_IP.text(), "0.01")
             while not self.mp_stop_flag.is_set():
                 try:
                     self.dmm_buffer_list.append(float(DMM6510readout.read_data(inst)))
                 except (TypeError, ValueError) as exc:
                     self._log_exception("Invalid DMM data received", exc, key="dmm_read_data", interval_sec=10.0)
-                    time.sleep(0.05)
+                    time.sleep(0.01)
                 except (OSError, RuntimeError) as exc:
                     self._log_exception("DMM read transport error", exc, key="dmm_transport", interval_sec=10.0)
                     time.sleep(0.1)
