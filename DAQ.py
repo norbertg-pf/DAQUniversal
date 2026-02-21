@@ -235,7 +235,7 @@ class DAQControlApp(QWidget):
         self.plot_window_input = QLineEdit("10")
         self.fps_label = QLabel("GUI FPS: 0.0")
         self.fps_label.setStyleSheet("color: gray; font-weight: bold;")
-        self.simulation_note_label = QLabel("SIMULATION MODE ACTIVE")
+        self.simulation_note_label = QLabel("SIMULATION MODE")
         self.simulation_note_label.setStyleSheet("color: red; font-weight: bold;")
         
         self.upload_status_label = QLabel("Cloud: Idle")
@@ -269,12 +269,15 @@ class DAQControlApp(QWidget):
         status_row = QHBoxLayout()
         status_row.addWidget(self.upload_status_label)
         status_row.addStretch()
-        status_row.addWidget(self.fps_label)
-        status_row.addWidget(self.simulation_note_label)
         controls_layout.addLayout(status_row, 7, 0, 1, 2)
         
         plot_control_layout = QVBoxLayout()
-        plot_control_layout.addWidget(QLabel("<b>Dynamic Plot Configuration</b>"))
+        plot_header = QHBoxLayout()
+        plot_header.addWidget(QLabel("<b>Dynamic Plot Configuration</b>"))
+        plot_header.addStretch()
+        plot_header.addWidget(self.fps_label)
+        plot_header.addWidget(self.simulation_note_label)
+        plot_control_layout.addLayout(plot_header)
         self.plot_scroll_area = QScrollArea()
         self.plot_scroll_widget = QWidget()
         self.plot_scroll_layout = QVBoxLayout(self.plot_scroll_widget)
@@ -942,7 +945,7 @@ class DAQControlApp(QWidget):
         self.math_process.start()
         
         self.last_update_time = time.perf_counter()
-        self.gui_timer.start(100)
+        self.gui_timer.start(int(1000 / 15))
 
     def stop_read(self):
         self.mp_stop_flag.set()
