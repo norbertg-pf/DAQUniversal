@@ -54,7 +54,6 @@ from ui_components import (
 
 class DAQControlApp(QWidget):
     MATH_DEVICE_ID = "__MATH_DEVICE__"
-    ALL_DEVICES_ID = "__ALL_DEVICES__"
 
     def __init__(self):
         super().__init__()
@@ -139,7 +138,7 @@ class DAQControlApp(QWidget):
 
         try:
             dev_name = self.device_cb.currentData()
-            if dev_name and dev_name not in (self.MATH_DEVICE_ID, self.ALL_DEVICES_ID):
+            if dev_name and dev_name != self.MATH_DEVICE_ID:
                 nidaqmx.system.Device(dev_name).reset_device()
                 do_init = nidaqmx.Task()
                 do_init.do_channels.add_do_chan(self.get_do_channel(), line_grouping=LineGrouping.CHAN_PER_LINE)
@@ -191,9 +190,6 @@ class DAQControlApp(QWidget):
     def _is_math_device_selected(self):
         return self.device_cb.currentData() == self.MATH_DEVICE_ID
 
-    def _is_all_devices_selected(self):
-        return self.device_cb.currentData() == self.ALL_DEVICES_ID
-
     def _signal_base_name(self, signal_name):
         return signal_name.split("@", 1)[0] if "@" in signal_name else signal_name
 
@@ -230,11 +226,11 @@ class DAQControlApp(QWidget):
 
     def _get_active_hw_device(self):
         dev_name = self.device_cb.currentData()
-        if dev_name and dev_name not in (self.MATH_DEVICE_ID, self.ALL_DEVICES_ID):
+        if dev_name and dev_name != self.MATH_DEVICE_ID:
             return dev_name
         for i in range(self.device_cb.count()):
             candidate = self.device_cb.itemData(i)
-            if candidate not in (self.MATH_DEVICE_ID, self.ALL_DEVICES_ID):
+            if candidate != self.MATH_DEVICE_ID:
                 return candidate
         return "Dev1"
 
@@ -425,9 +421,9 @@ class DAQControlApp(QWidget):
             for d in sys_local.devices:
                 devs.append((d.name, d.product_type))
             if not devs:
-                devs = [("Dev1", "Simulated Device")]
+                devs = [("Simulated device", "Simulated Device")]
         except Exception:
-            devs = [("Dev1", "Simulated Device")]
+            devs = [("Simulated device", "Simulated Device")]
 
         idx_to_set = 0
         for i, (name, ptype) in enumerate(devs):
@@ -437,7 +433,6 @@ class DAQControlApp(QWidget):
             if name == current_data:
                 idx_to_set = i
 
-        self.device_cb.addItem("All Devices", userData=self.ALL_DEVICES_ID)
         self.device_cb.addItem("Math (Virtual)", userData=self.MATH_DEVICE_ID)
 
         if self.device_cb.count() > 0:
@@ -445,7 +440,7 @@ class DAQControlApp(QWidget):
             self.on_device_changed(self.device_cb.currentIndex())
 
     def get_selected_device_profile(self):
-        if self._is_math_device_selected() or self._is_all_devices_selected():
+        if self._is_math_device_selected():
             return DEFAULT_HARDWARE_PROFILE
 
         dev_name = self.device_cb.currentData() or ""
@@ -460,28 +455,17 @@ class DAQControlApp(QWidget):
             for sig in self.available_signals: self._ensure_signal_state(sig)
             return
 
-        if self._is_all_devices_selected():
-            valid_hw = set()
-            for dev in self.detected_devices:
-                valid_hw.update(self._channels_for_device(dev))
-            valid_hw.add("DMM")
-            kept_math = [s for s in self.available_signals if s.startswith("MATH")]
-            kept_hw = [s for s in self.available_signals if s in valid_hw]
-            if not kept_hw and self.detected_devices:
-                kept_hw = self._channels_for_device(self.detected_devices[0])
-            self.available_signals = kept_hw + kept_math
-            for sig in self.available_signals: self._ensure_signal_state(sig)
-            return
+        valid_hw = set()
+        for dev in self.detected_devices:
+            valid_hw.update(self._channels_for_device(dev))
+        valid_hw.add("DMM")
 
-        self.current_hardware_profile = self.get_selected_device_profile()
-        dev = self.device_cb.currentData()
-        valid_hw = set(self._channels_for_device(dev) + ["DMM"])
-
-        # Keep virtual channels, clamp hardware channels to current device profile.
         kept_math = [s for s in self.available_signals if s.startswith("MATH")]
         kept_hw = [s for s in self.available_signals if s in valid_hw]
-        if not kept_hw:
-            kept_hw = [self._mk_dev_signal(dev, sig) for sig in self.current_hardware_profile.default_enabled_signals]
+        if not kept_hw and self.detected_devices:
+            default_dev = self.detected_devices[0]
+            default_profile = get_profile(detect_profile_name(self.device_product_types.get(default_dev, ""), default_dev))
+            kept_hw = [self._mk_dev_signal(default_dev, sig) for sig in default_profile.default_enabled_signals]
 
         self.available_signals = kept_hw + kept_math
         for sig in self.available_signals: self._ensure_signal_state(sig)
@@ -505,15 +489,11 @@ class DAQControlApp(QWidget):
         if self._is_math_device_selected():
             allowed_signals = [f"MATH{i}" for i in range(4)]
             active_signals = [s for s in self.available_signals if s.startswith("MATH")]
-        elif self._is_all_devices_selected():
+        else:
             allowed_signals = []
             for dev in self.detected_devices:
                 allowed_signals.extend(self._channels_for_device(dev))
             allowed_signals.append("DMM")
-            active_signals = [s for s in self.available_signals if s in allowed_signals]
-        else:
-            dev = self.device_cb.currentData()
-            allowed_signals = self._channels_for_device(dev) + ["DMM"]
             active_signals = [s for s in self.available_signals if s in allowed_signals]
 
         dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals)
@@ -522,8 +502,7 @@ class DAQControlApp(QWidget):
             if self._is_math_device_selected():
                 self.available_signals = selected
             else:
-                math_signals = [s for s in self.available_signals if s.startswith("MATH")]
-                self.available_signals = selected + math_signals
+                self.available_signals = selected
             for sig in self.available_signals: self._ensure_signal_state(sig)
             self.rebuild_config_tab()
             self.apply_config_update()
