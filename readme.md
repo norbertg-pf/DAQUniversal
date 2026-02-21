@@ -27,16 +27,16 @@ python -m pip install --upgrade pip
 python -m pip install pyinstaller pyqtgraph
 ```
 
-2. Build a single executable and place it in `binaries`:
+2. Build a single executable and place it in `build`:
 
 ```bash
-mkdir -p binaries
-python -m PyInstaller --noconfirm --clean --distpath binaries --workpath build DAQ_ui.spec
+mkdir -p build
+python -m PyInstaller --noconfirm --clean --distpath build --workpath build-temp DAQ_ui.spec
 ```
 
 Result:
 
-- `binaries/DAQUniversalReader.exe` (standalone one-file app)
+- `build/DAQUniversalReader.exe` (standalone one-file app)
 
 Notes:
 
