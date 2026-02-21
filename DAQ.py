@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import logging
 import threading
 import multiprocessing as mp
 import queue
@@ -55,6 +56,8 @@ class DAQControlApp(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("DAQ Control GUI")
+        self.logger = logging.getLogger(__name__)
+        self._error_log_times = {}
 
         self.DMMread_thread = None
         self.tdms_writer_thread = None
@@ -140,6 +143,36 @@ class DAQControlApp(QWidget):
                 do_init.close()
         except Exception as e:
             print(f"[WARN] DAQ Hardware not found at startup: {e}.")
+
+    def _should_log_error(self, key, interval_sec=5.0):
+        now = time.monotonic()
+        last = self._error_log_times.get(key, 0.0)
+        if now - last >= interval_sec:
+            self._error_log_times[key] = now
+            return True
+        return False
+
+    def _log_exception(self, context, exc, key=None, interval_sec=5.0):
+        error_key = key or context
+        if not self._should_log_error(error_key, interval_sec=interval_sec):
+            return
+        msg = f"[ERROR] {context}: {exc}"
+        try:
+            self.logger.exception(msg)
+        except Exception:
+            print(msg)
+            print(traceback.format_exc())
+
+    def _set_shutdown_status(self, text, color="green"):
+        def _update():
+            self.shutdown_label.setText(text)
+            self.shutdown_label.setStyleSheet(f"color: {color}; font-weight: bold;")
+        QTimer.singleShot(0, _update)
+
+    def _show_fatal_error(self, title, message):
+        def _show():
+            QMessageBox.critical(self, title, message)
+        QTimer.singleShot(0, _show)
 
     def get_default_channel_config(self, raw_name):
         term = "RSE" if raw_name.startswith("AI") and int(raw_name[2:]) >= 16 else "DIFF"
@@ -976,33 +1009,60 @@ class DAQControlApp(QWidget):
         try:
             with TdmsWriter(str(filename)) as writer:
                 while not self.mp_stop_flag.is_set() or not self.tdms_queue.empty():
-                    try: chunk = self.tdms_queue.get(timeout=0.2)
-                    except queue.Empty: continue
-                    time_arr, ai_data, ao_data, dmm_data = chunk
-                    channels = [ChannelObject("RawData", "Time", time_arr)]
-                    for i, sig in enumerate(active_ai): channels.append(ChannelObject("RawData", sig, ai_data[i]))
-                    for i, sig in enumerate(active_ao): channels.append(ChannelObject("RawData", sig, ao_data[i]))
-                    if has_dmm: channels.append(ChannelObject("RawData", "DMM", dmm_data.flatten()))
-                    writer.write_segment(channels)
-        except Exception: pass
+                    try:
+                        chunk = self.tdms_queue.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+                    except (EOFError, OSError, ValueError) as exc:
+                        self._log_exception("TDMS queue read failure", exc, key="tdms_queue_read", interval_sec=10.0)
+                        continue
+
+                    try:
+                        time_arr, ai_data, ao_data, dmm_data = chunk
+                        channels = [ChannelObject("RawData", "Time", time_arr)]
+                        for i, sig in enumerate(active_ai):
+                            channels.append(ChannelObject("RawData", sig, ai_data[i]))
+                        for i, sig in enumerate(active_ao):
+                            channels.append(ChannelObject("RawData", sig, ao_data[i]))
+                        if has_dmm:
+                            channels.append(ChannelObject("RawData", "DMM", dmm_data.flatten()))
+                        writer.write_segment(channels)
+                    except (IndexError, TypeError, ValueError, AttributeError) as exc:
+                        self._log_exception("Failed to write TDMS segment", exc, key="tdms_segment_write", interval_sec=10.0)
+        except (OSError, IOError, ValueError) as exc:
+            self._log_exception("TDMS writer failed", exc, key="tdms_writer_fatal", interval_sec=10.0)
+            self._set_shutdown_status("Status: TDMS write error", color="red")
 
     def DMM_read(self):
-        if "DMM" not in self.available_signals: return
+        if "DMM" not in self.available_signals:
+            return
         if self.simulate_mode:
             while not self.mp_stop_flag.is_set():
                 self.dmm_buffer_list.append(float(np.random.uniform(-0.1, 0.1)))
                 time.sleep(0.1)
             return
+
         inst = None
         try:
             inst = DMM6510readout.write_script_to_Keithley(self.Keithley_DMM_IP.text(), "0.05")
             while not self.mp_stop_flag.is_set():
-                self.dmm_buffer_list.append(float(DMM6510readout.read_data(inst)))
-        except Exception: pass
+                try:
+                    self.dmm_buffer_list.append(float(DMM6510readout.read_data(inst)))
+                except (TypeError, ValueError) as exc:
+                    self._log_exception("Invalid DMM data received", exc, key="dmm_read_data", interval_sec=10.0)
+                    time.sleep(0.05)
+                except (OSError, RuntimeError) as exc:
+                    self._log_exception("DMM read transport error", exc, key="dmm_transport", interval_sec=10.0)
+                    time.sleep(0.1)
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._log_exception("Failed to initialize DMM readout", exc, key="dmm_init", interval_sec=10.0)
+            self._set_shutdown_status("Status: DMM read failure", color="red")
         finally:
-            if inst is not None: 
-                try: DMM6510readout.stop_instrument(inst)
-                except: pass
+            if inst is not None:
+                try:
+                    DMM6510readout.stop_instrument(inst)
+                except (OSError, RuntimeError, AttributeError) as exc:
+                    self._log_exception("Failed to stop DMM instrument", exc, key="dmm_stop", interval_sec=30.0)
 
     def update_gui(self):
         # 1. EMPTY GUI UPDATE QUEUE
@@ -1170,17 +1230,23 @@ class DAQControlApp(QWidget):
 
         with self.write_task_lock:
             if self.write_task is not None:
-                try: self.write_task.stop(); self.write_task.close()
-                except: pass
-            
+                try:
+                    self.write_task.stop()
+                    self.write_task.close()
+                except (nidaqmx.errors.DaqError, RuntimeError, AttributeError) as exc:
+                    self._log_exception("Failed to stop existing AO write task", exc, key="ao_stop_existing", interval_sec=10.0)
+
             write_channel = self.get_write_channel()
             self.write_task = nidaqmx.Task()
             self.write_task.ao_channels.add_ao_voltage_chan(write_channel)
             self.write_task.timing.cfg_samp_clk_timing(write_rate, sample_mode=AcquisitionType.FINITE, samps_per_chan=len(voltages))
             try: self.write_task.write(voltages, auto_start=True)
-            except nidaqmx.errors.DaqError:
-                try: self.write_task.close()
-                except: pass
+            except nidaqmx.errors.DaqError as exc:
+                self._log_exception("Initial AO write failed, retrying", exc, key="ao_write_retry", interval_sec=10.0)
+                try:
+                    self.write_task.close()
+                except (nidaqmx.errors.DaqError, RuntimeError, AttributeError) as close_exc:
+                    self._log_exception("Failed to close AO task before retry", close_exc, key="ao_close_before_retry", interval_sec=10.0)
                 time.sleep(0.1)
                 self.write_task = nidaqmx.Task()
                 self.write_task.ao_channels.add_ao_voltage_chan(write_channel)
@@ -1197,19 +1263,29 @@ class DAQControlApp(QWidget):
         if self.simulate_mode: return
         with self.write_task_lock:
             if self.write_task is not None:
-                try: self.write_task.stop(); self.write_task.close()
-                except: pass
+                try:
+                    self.write_task.stop()
+                    self.write_task.close()
+                except (nidaqmx.errors.DaqError, RuntimeError, AttributeError) as exc:
+                    self._log_exception("Failed to stop AO write task", exc, key="ao_stop", interval_sec=10.0)
                 self.write_task = None
-        try: self.zero_ao_output()
-        except: pass
+        try:
+            self.zero_ao_output()
+        except (nidaqmx.errors.DaqError, RuntimeError, AttributeError) as exc:
+            self._log_exception("Failed to zero AO output", exc, key="ao_zero", interval_sec=10.0)
+            self._set_shutdown_status("Status: AO shutdown warning", color="orange")
 
     def zero_ao_output(self):
-        if self.simulate_mode: return
+        if self.simulate_mode:
+            return
         try:
             with nidaqmx.Task() as zero_task:
                 zero_task.ao_channels.add_ao_voltage_chan(self.get_write_channel())
-                zero_task.write(0.0); time.sleep(0.01); zero_task.write(0.0)
-        except: pass
+                zero_task.write(0.0)
+                time.sleep(0.01)
+                zero_task.write(0.0)
+        except (nidaqmx.errors.DaqError, RuntimeError, AttributeError) as exc:
+            self._log_exception("Zero AO output failed", exc, key="ao_zero_direct", interval_sec=10.0)
 
     def reset_all(self):
         self.write_stop_flag.set()
@@ -1225,8 +1301,11 @@ class DAQControlApp(QWidget):
 
         with self.write_task_lock:
             if self.write_task is not None:
-                try: self.write_task.stop(); self.write_task.close()
-                except: pass
+                try:
+                    self.write_task.stop()
+                    self.write_task.close()
+                except (nidaqmx.errors.DaqError, RuntimeError, AttributeError) as exc:
+                    self._log_exception("Failed to stop AO task during reset", exc, key="ao_reset_stop", interval_sec=10.0)
                 self.write_task = None
 
         self.zero_ao_output()
@@ -1268,8 +1347,13 @@ class DAQControlApp(QWidget):
         
         with self.write_task_lock:
             if self.write_task is not None:
-                try: self.write_task.stop(); self.write_task.close()
-                except: pass
+                try:
+                    self.write_task.stop()
+                    self.write_task.close()
+                except (nidaqmx.errors.DaqError, RuntimeError, AttributeError) as exc:
+                    self._log_exception("Failed to stop AO task during close", exc, key="ao_close_stop", interval_sec=10.0)
+                    self._set_shutdown_status("Status: AO close warning", color="orange")
+                    self._show_fatal_error("Shutdown Warning", "Failed to stop AO task cleanly. Hardware may require manual reset.")
         self.zero_ao_output()
         event.accept()
 
