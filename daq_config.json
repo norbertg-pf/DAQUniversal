@@ -5,6 +5,8 @@
         "read_rate": "10000",
         "avg_samples": "100",
         "plot_window": "10",
+        "window_width": 1889,
+        "window_height": 1058,
         "threshold": "0.0002",
         "dmm_ip": "169.254.169.37",
         "gdrive_link": "https://drive.google.com/drive/folders/1d2dbHBz7TNSmnjBX3YSR3hfUGzHbh6IV",
@@ -559,28 +561,24 @@
     },
     "subplots": [
         [
-            "AI2"
-        ],
-        [
             "AI0",
             "AI1"
         ],
         [
             "AI2"
+        ],
+        [
+            "AO0"
         ]
     ],
     "indicators": [
-        {
-            "signal": "AI2",
-            "type": "Current (100ms avg)"
-        },
         {
             "signal": "AI0",
             "type": "Current (100ms avg)"
         },
         {
-            "signal": "AI1",
-            "type": "RMS"
+            "signal": "AI0",
+            "type": "Current (100ms avg)"
         }
     ]
 }

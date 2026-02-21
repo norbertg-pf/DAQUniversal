@@ -193,7 +193,7 @@ class ExportDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.parent = parent
-        self.setWindowTitle("Export ASCII Data (Interactive)")
+        self.setWindowTitle("Export ASCII Data")
         self.setMinimumWidth(1000)
         self.setMinimumHeight(600)
         

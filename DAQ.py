@@ -78,6 +78,9 @@ class DAQControlApp(QWidget):
         self.write_stop_flag = threading.Event()
         self.write_task = None
         self.write_task_lock = threading.Lock()
+
+        # Simulation mode is intentionally always enabled.
+        self.simulate_mode = True
         self.history_lock = threading.Lock() 
 
         self.start_timestamp = None
@@ -136,7 +139,7 @@ class DAQControlApp(QWidget):
                 do_init.write([False, False])
                 do_init.close()
         except Exception as e:
-            print(f"[WARN] DAQ Hardware not found at startup: {e}. Check 'Simulate Mode'.")
+            print(f"[WARN] DAQ Hardware not found at startup: {e}.")
 
     def get_default_channel_config(self, raw_name):
         term = "RSE" if raw_name.startswith("AI") and int(raw_name[2:]) >= 16 else "DIFF"
@@ -230,10 +233,10 @@ class DAQControlApp(QWidget):
         self.read_rate_input = QLineEdit("10000")
         self.average_samples_input = QLineEdit("100")
         self.plot_window_input = QLineEdit("10")
-        self.simulate_checkbox = QCheckBox("Simulate Mode")
-
         self.fps_label = QLabel("GUI FPS: 0.0")
         self.fps_label.setStyleSheet("color: gray; font-weight: bold;")
+        self.simulation_note_label = QLabel("SIMULATION MODE")
+        self.simulation_note_label.setStyleSheet("color: red; font-weight: bold;")
         
         self.upload_status_label = QLabel("Cloud: Idle")
         self.upload_status_label.setStyleSheet("color: gray; font-weight: bold;")
@@ -247,7 +250,7 @@ class DAQControlApp(QWidget):
         self.export_ascii_btn = QPushButton("Export ASCII Data")
         self.export_ascii_btn.setStyleSheet("font-weight: bold; background-color: #0078D7; color: white;")
         self.export_ascii_btn.clicked.connect(self.open_export_dialog)
-        self.open_ao_btn = QPushButton("Open AnalogOut Control Pop-up")
+        self.open_ao_btn = QPushButton("Open AnalogOut Control")
         self.open_ao_btn.setStyleSheet("font-weight: bold; background-color: #ff9900; color: black;")
         self.open_ao_btn.clicked.connect(self.launch_analog_out)
         
@@ -264,15 +267,18 @@ class DAQControlApp(QWidget):
         controls_layout.addWidget(self.open_ao_btn, 6, 0, 1, 2)
         
         status_row = QHBoxLayout()
-        status_row.addWidget(self.simulate_checkbox)
-        status_row.addStretch()
         status_row.addWidget(self.upload_status_label)
+        status_row.addSpacing(12)
+        status_row.addWidget(self.simulation_note_label)
         status_row.addStretch()
-        status_row.addWidget(self.fps_label)
         controls_layout.addLayout(status_row, 7, 0, 1, 2)
         
         plot_control_layout = QVBoxLayout()
-        plot_control_layout.addWidget(QLabel("<b>Dynamic Plot Configuration</b>"))
+        plot_header = QHBoxLayout()
+        plot_header.addWidget(QLabel("<b>Dynamic Plot Configuration</b>"))
+        plot_header.addStretch()
+        plot_header.addWidget(self.fps_label)
+        plot_control_layout.addLayout(plot_header)
         self.plot_scroll_area = QScrollArea()
         self.plot_scroll_widget = QWidget()
         self.plot_scroll_layout = QVBoxLayout(self.plot_scroll_widget)
@@ -419,7 +425,7 @@ class DAQControlApp(QWidget):
                 else: ch_ui['term_cb'].setCurrentText(b_term)
 
     def calibrate_single_offset(self, raw_name, scale_input, offset_input, term_cb, range_cb, sensor_cb):
-        if self.simulate_checkbox.isChecked():
+        if self.simulate_mode:
             offset_input.setText("0.000")
             return
         try: scale_val = float(scale_input.text())
@@ -762,11 +768,13 @@ class DAQControlApp(QWidget):
                 "read_rate": self.read_rate_input.text(),
                 "avg_samples": self.average_samples_input.text(),
                 "plot_window": self.plot_window_input.text(),
+                "window_width": self.width(),
+                "window_height": self.height(),
                 "threshold": self.threshold_input.text(),
                 "dmm_ip": self.Keithley_DMM_IP.text(),
                 "gdrive_link": self.gdrive_link_input.text(),
                 "gdrive_auth": self.gdrive_auth_cb.currentText(),
-                "simulate": self.simulate_checkbox.isChecked(),
+                "simulate": self.simulate_mode,
                 "output_folder": self.output_folder,
                 "available_signals": self.available_signals
             },
@@ -794,6 +802,9 @@ class DAQControlApp(QWidget):
             if "read_rate" in main_cfg: self.read_rate_input.setText(main_cfg["read_rate"])
             if "avg_samples" in main_cfg: self.average_samples_input.setText(main_cfg["avg_samples"])
             if "plot_window" in main_cfg: self.plot_window_input.setText(main_cfg["plot_window"])
+            if "window_width" in main_cfg and "window_height" in main_cfg:
+                try: self.resize(int(main_cfg["window_width"]), int(main_cfg["window_height"]))
+                except (TypeError, ValueError): pass
             if "threshold" in main_cfg: self.threshold_input.setText(main_cfg["threshold"])
             if "dmm_ip" in main_cfg: self.Keithley_DMM_IP.setText(main_cfg["dmm_ip"])
             if "gdrive_link" in main_cfg: self.gdrive_link_input.setText(main_cfg["gdrive_link"])
@@ -802,10 +813,9 @@ class DAQControlApp(QWidget):
                 idx = self.gdrive_auth_cb.findText(main_cfg["gdrive_auth"])
                 if idx >= 0: self.gdrive_auth_cb.setCurrentIndex(idx)
 
-            if "simulate" in main_cfg: self.simulate_checkbox.setChecked(main_cfg["simulate"])
             if "output_folder" in main_cfg: 
                 self.output_folder = main_cfg["output_folder"]
-                self.folder_display.setText(f"Output Folder: {self.output_folder[-40:]}")
+                self.folder_display.setText(f"Output Folder: ..{self.output_folder[-30:]}")
 
             if "available_signals" in main_cfg: self.available_signals = main_cfg["available_signals"]
             self.apply_selected_device_profile()
@@ -917,7 +927,7 @@ class DAQControlApp(QWidget):
         except ValueError: average_samples = 100
         samples_per_read = max(1, int(read_rate // 10)) 
         
-        simulate = self.simulate_checkbox.isChecked()
+        simulate = self.simulate_mode
         has_dmm = "DMM" in self.available_signals
         n_ai = len(active_ai_configs)
         n_ao = sum(1 for c in configs if c['Name'].startswith("AO"))
@@ -936,7 +946,7 @@ class DAQControlApp(QWidget):
         self.math_process.start()
         
         self.last_update_time = time.perf_counter()
-        self.gui_timer.start(100)
+        self.gui_timer.start(int(1000 / 15))
 
     def stop_read(self):
         self.mp_stop_flag.set()
@@ -978,7 +988,7 @@ class DAQControlApp(QWidget):
 
     def DMM_read(self):
         if "DMM" not in self.available_signals: return
-        if self.simulate_checkbox.isChecked():
+        if self.simulate_mode:
             while not self.mp_stop_flag.is_set():
                 self.dmm_buffer_list.append(float(np.random.uniform(-0.1, 0.1)))
                 time.sleep(0.1)
@@ -1147,7 +1157,7 @@ class DAQControlApp(QWidget):
         if self.start_timestamp is None: self.start_timestamp = time.time()
         self.write_stop_flag.clear()
         
-        if self.simulate_checkbox.isChecked():
+        if self.simulate_mode:
             self.write_active_label.setStyleSheet("color: green; font-weight: bold;")
             self.shutdown_label.setText("Status: OK (Simulated)")
             self.shutdown_label.setStyleSheet("color: green; font-weight: bold;")
@@ -1184,7 +1194,7 @@ class DAQControlApp(QWidget):
     def stop_write(self):
         self.write_stop_flag.set()
         self.write_active_label.setStyleSheet("color: grey; font-weight: bold;")
-        if self.simulate_checkbox.isChecked(): return
+        if self.simulate_mode: return
         with self.write_task_lock:
             if self.write_task is not None:
                 try: self.write_task.stop(); self.write_task.close()
@@ -1194,7 +1204,7 @@ class DAQControlApp(QWidget):
         except: pass
 
     def zero_ao_output(self):
-        if self.simulate_checkbox.isChecked(): return
+        if self.simulate_mode: return
         try:
             with nidaqmx.Task() as zero_task:
                 zero_task.ao_channels.add_ao_voltage_chan(self.get_write_channel())
