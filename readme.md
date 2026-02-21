@@ -28,6 +28,7 @@ Current behavior:
 - Since Keithley data is ~100 Hz, samples are duplicated (zero-order hold) to match the higher NI sample stream when building each DAQ chunk.
 - In the channel selector, you can enable `DMM` as one channel alongside NI signals.
 - The channel selector popup also includes DMM settings (IP, rate, timeout) for quick Keithley tuning.
+- Simulated NI channels are hidden in channel selection while using the Keithley workflow.
 - In **Channel Config**, the `DMM` channel supports AI-like processing fields: custom name, scale, unit, offset, and LPF settings.
 
 How to use:

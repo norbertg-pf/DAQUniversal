@@ -509,6 +509,8 @@ class DAQControlApp(QWidget):
         else:
             allowed_signals = []
             for dev in self.detected_devices:
+                if dev == "Simulated device":
+                    continue
                 allowed_signals.extend(self._channels_for_device(dev))
             allowed_signals.append("DMM")
             active_signals = [s for s in self.available_signals if s in allowed_signals]
@@ -1177,7 +1179,7 @@ class DAQControlApp(QWidget):
     def tdms_writer_thread_func(self):
         filename = self.generate_filename("raw_data")
         self.current_tdms_filepath = str(filename)
-        active_ai = [s for s in self.available_signals if self._is_ai_signal(s)]
+        active_ai = [c["Name"] for c in self.active_channel_configs if c.get("Kind") == "AI"]
         active_ao = [s for s in self.available_signals if self._is_ao_signal(s)]
         has_dmm = "DMM" in self.available_signals
 

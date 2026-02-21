@@ -134,7 +134,6 @@ class ChannelSelectionDialog(QDialog):
         self.setMinimumWidth(800)
         layout = QVBoxLayout(self)
         self.checkboxes = {}
-        self.dmm_settings = dmm_settings or {}
         allowed = list(allowed_signals) if allowed_signals is not None else list(ALL_CHANNELS)
 
         def split_sig(sig):
@@ -536,7 +535,6 @@ class SubplotSettingsDialog(QDialog):
         self.setWindowTitle("Select Channels for Subplot")
         layout = QVBoxLayout(self)
         self.checkboxes = {}
-        self.dmm_settings = dmm_settings or {}
         grid = QGridLayout()
         row, col = 0, 0
         for raw_sig, display_text in mapping:
