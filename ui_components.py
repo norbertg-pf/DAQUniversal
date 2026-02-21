@@ -134,6 +134,7 @@ class ChannelSelectionDialog(QDialog):
         self.setMinimumWidth(800)
         layout = QVBoxLayout(self)
         self.checkboxes = {}
+        self.dmm_ip_input = None
         allowed = list(allowed_signals) if allowed_signals is not None else list(ALL_CHANNELS)
 
         def split_sig(sig):
@@ -168,6 +169,18 @@ class ChannelSelectionDialog(QDialog):
                     r += 1
             ai_group.setLayout(ai_layout)
             layout.addWidget(ai_group)
+
+        if "DMM" in ai_signals:
+            dmm_ip_group = QGroupBox("Keithley 6510 DMM")
+            dmm_ip_layout = QGridLayout()
+            dmm_ip_layout.addWidget(QLabel("Keithley DMM IP Address:"), 0, 0)
+            default_dmm_ip = ""
+            if parent is not None and hasattr(parent, "Keithley_DMM_IP"):
+                default_dmm_ip = parent.Keithley_DMM_IP.text()
+            self.dmm_ip_input = QLineEdit(default_dmm_ip)
+            dmm_ip_layout.addWidget(self.dmm_ip_input, 0, 1)
+            dmm_ip_group.setLayout(dmm_ip_layout)
+            layout.addWidget(dmm_ip_group)
 
         if ao_signals:
             ao_group = QGroupBox("Analog Outputs (AO)")
@@ -211,6 +224,11 @@ class ChannelSelectionDialog(QDialog):
 
     def get_selected(self):
         return [sig for sig, cb in self.checkboxes.items() if cb.isChecked()]
+
+    def get_dmm_ip(self):
+        if self.dmm_ip_input is None:
+            return None
+        return self.dmm_ip_input.text().strip()
 
 class ExportDialog(QDialog):
     def __init__(self, parent=None):

@@ -495,9 +495,6 @@ class DAQControlApp(QWidget):
         new_device = self.device_cb.currentData()
         if not new_device:
             return
-        is_dmm_device = new_device == self.DMM_DEVICE_ID
-        self.dmm_ip_label.setVisible(is_dmm_device)
-        self.Keithley_DMM_IP.setVisible(is_dmm_device)
         for ch in getattr(self, "channel_ui_configs", []):
             raw_name = ch['name']
             if not raw_name.startswith("MATH"):
@@ -524,6 +521,9 @@ class DAQControlApp(QWidget):
 
         dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals)
         if dialog.exec_():
+            dmm_ip = dialog.get_dmm_ip()
+            if dmm_ip is not None:
+                self.Keithley_DMM_IP.setText(dmm_ip)
             selected = dialog.get_selected()
             if len(selected) == 0:
                 self.available_signals = []
@@ -607,10 +607,7 @@ class DAQControlApp(QWidget):
         self.device_cb = QComboBox()
         self.device_cb.currentIndexChanged.connect(self.on_device_changed)
         dev_layout.addWidget(self.device_cb)
-        self.dmm_ip_label = QLabel("<b>Keithley DMM IP:</b>")
-        dev_layout.addWidget(self.dmm_ip_label)
         self.Keithley_DMM_IP = QLineEdit("169.254.169.37")
-        dev_layout.addWidget(self.Keithley_DMM_IP)
         self.refresh_dev_btn = QPushButton("Refresh Devices")
         self.refresh_dev_btn.clicked.connect(self.refresh_devices)
         dev_layout.addWidget(self.refresh_dev_btn)
