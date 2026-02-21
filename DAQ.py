@@ -54,6 +54,7 @@ from ui_components import (
 
 class DAQControlApp(QWidget):
     MATH_DEVICE_ID = "__MATH_DEVICE__"
+    DMM_DEVICE_ID = "__DMM_DEVICE__"
 
     def __init__(self):
         super().__init__()
@@ -190,6 +191,9 @@ class DAQControlApp(QWidget):
     def _is_math_device_selected(self):
         return self.device_cb.currentData() == self.MATH_DEVICE_ID
 
+    def _is_dmm_device_selected(self):
+        return self.device_cb.currentData() == self.DMM_DEVICE_ID
+
     def _signal_base_name(self, signal_name):
         return signal_name.split("@", 1)[0] if "@" in signal_name else signal_name
 
@@ -197,7 +201,8 @@ class DAQControlApp(QWidget):
         return signal_name.split("@", 1)[1] if "@" in signal_name else None
 
     def _is_ai_signal(self, signal_name):
-        return self._signal_base_name(signal_name).startswith("AI")
+        base = self._signal_base_name(signal_name)
+        return base.startswith("AI") or base == "DMM"
 
     def _is_ao_signal(self, signal_name):
         return self._signal_base_name(signal_name).startswith("AO")
@@ -448,14 +453,20 @@ class DAQControlApp(QWidget):
             if name == current_data:
                 idx_to_set = i
 
+        self.device_cb.addItem("Keithley 6510 (DMM)", userData=self.DMM_DEVICE_ID)
         self.device_cb.addItem("Math (Virtual)", userData=self.MATH_DEVICE_ID)
 
+        if current_data == self.DMM_DEVICE_ID:
+            idx_to_set = self.device_cb.findData(self.DMM_DEVICE_ID)
+        elif current_data == self.MATH_DEVICE_ID:
+            idx_to_set = self.device_cb.findData(self.MATH_DEVICE_ID)
+
         if self.device_cb.count() > 0:
-            self.device_cb.setCurrentIndex(idx_to_set)
+            self.device_cb.setCurrentIndex(max(0, idx_to_set))
             self.on_device_changed(self.device_cb.currentIndex())
 
     def get_selected_device_profile(self):
-        if self._is_math_device_selected():
+        if self._is_math_device_selected() or self._is_dmm_device_selected():
             return DEFAULT_HARDWARE_PROFILE
 
         dev_name = self.device_cb.currentData() or ""
@@ -473,7 +484,8 @@ class DAQControlApp(QWidget):
         kept_hw = [s for s in self.available_signals if s in valid_hw]
 
         self.available_signals = kept_hw + kept_math
-        for sig in self.available_signals: self._ensure_signal_state(sig)
+        for sig in self.available_signals:
+            self._ensure_signal_state(sig)
 
     def on_device_changed(self, _):
         if not hasattr(self, "config_grid"):
@@ -484,7 +496,7 @@ class DAQControlApp(QWidget):
             return
         for ch in getattr(self, "channel_ui_configs", []):
             raw_name = ch['name']
-            if not raw_name.startswith("MATH"):
+            if not raw_name.startswith("MATH") and raw_name != "DMM":
                 base_name = self._signal_base_name(raw_name)
                 dev_name = self._signal_device_name(raw_name) or new_device
                 ch['ch_label'].setText(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
@@ -494,24 +506,54 @@ class DAQControlApp(QWidget):
         if self._is_math_device_selected():
             allowed_signals = [f"MATH{i}" for i in range(4)]
             active_signals = [s for s in self.available_signals if s.startswith("MATH")]
+            selection_scope = "math"
+        elif self._is_dmm_device_selected():
+            allowed_signals = ["DMM"]
+            active_signals = [s for s in self.available_signals if s == "DMM"]
+            selection_scope = "dmm"
         else:
-            allowed_signals = []
-            for dev in self.detected_devices:
-                allowed_signals.extend(self._channels_for_device(dev))
-            allowed_signals.append("DMM")
+            selected_device = self.device_cb.currentData()
+            ptype = (self.device_product_types.get(selected_device, "") or "").lower()
+            if selected_device and not (selected_device.lower().startswith("simulated") or "simulated" in ptype):
+                allowed_signals = self._channels_for_device(selected_device)
+            else:
+                allowed_signals = []
             active_signals = [s for s in self.available_signals if s in allowed_signals]
+            selection_scope = "device"
 
-        dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals)
+        dmm_settings = {"ip": self.keithley_dmm_ip, "rate_hz": self.Keithley_DMM_rate.text(), "timeout_s": self.Keithley_DMM_timeout.text()}
+        dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals, dmm_settings=dmm_settings)
         if dialog.exec_():
             selected = dialog.get_selected()
+            dmm_cfg = dialog.get_dmm_settings()
+            if dmm_cfg:
+                self.keithley_dmm_ip = dmm_cfg.get("ip", self.keithley_dmm_ip)
+                self.Keithley_DMM_rate.setText(dmm_cfg.get("rate_hz", self.Keithley_DMM_rate.text()))
+                self.Keithley_DMM_timeout.setText(dmm_cfg.get("timeout_s", self.Keithley_DMM_timeout.text()))
             if len(selected) == 0:
-                self.available_signals = []
-            elif self._is_math_device_selected():
+                if selection_scope == "math":
+                    self.available_signals = [s for s in self.available_signals if not s.startswith("MATH")]
+                elif selection_scope == "dmm":
+                    self.available_signals = [s for s in self.available_signals if s != "DMM"]
+                else:
+                    selected_device = self.device_cb.currentData()
+                    self.available_signals = [
+                        s for s in self.available_signals
+                        if self._signal_device_name(s) != selected_device
+                    ]
+            elif selection_scope == "math":
                 kept_hw = [s for s in self.available_signals if not s.startswith("MATH")]
                 self.available_signals = kept_hw + selected
+            elif selection_scope == "dmm":
+                kept_non_dmm = [s for s in self.available_signals if s != "DMM"]
+                self.available_signals = kept_non_dmm + selected
             else:
-                kept_math = [s for s in self.available_signals if s.startswith("MATH")]
-                self.available_signals = selected + kept_math
+                selected_device = self.device_cb.currentData()
+                kept_other = [
+                    s for s in self.available_signals
+                    if self._signal_device_name(s) != selected_device
+                ]
+                self.available_signals = kept_other + selected
             for sig in self.available_signals: self._ensure_signal_state(sig)
             self.rebuild_config_tab()
             self.apply_config_update()
@@ -628,25 +670,36 @@ class DAQControlApp(QWidget):
         self.config_scroll.setWidget(self.config_widget)
         main_lay.addWidget(self.config_scroll)
         
+        self.keithley_dmm_ip = "169.254.169.37"
+
         bottom_grid = QGridLayout()
-        bottom_grid.addWidget(QLabel("<b>Keithley DMM IP:</b>"), 0, 0)
-        self.Keithley_DMM_IP = QLineEdit("169.254.169.37")
-        bottom_grid.addWidget(self.Keithley_DMM_IP, 0, 1, 1, 4) 
+        bottom_grid.addWidget(QLabel("<b>DMM Rate [Hz]:</b>"), 0, 0)
+        self.Keithley_DMM_rate = QLineEdit("100")
+        bottom_grid.addWidget(self.Keithley_DMM_rate, 0, 1)
+
+        bottom_grid.addWidget(QLabel("<b>DMM Timeout [s]:</b>"), 0, 2)
+        self.Keithley_DMM_timeout = QLineEdit("1.0")
+        bottom_grid.addWidget(self.Keithley_DMM_timeout, 0, 3)
+
+        bottom_grid.addWidget(QLabel("<b>DMM Backend:</b>"), 0, 4)
+        self.Keithley_backend_cb = QComboBox()
+        self.Keithley_backend_cb.addItems(["pyvisa", "keithley_daq6510 (auto)"])
+        bottom_grid.addWidget(self.Keithley_backend_cb, 0, 5)
         
         bottom_grid.addWidget(QLabel("<b>Google Drive Target Folder Link:</b>"), 1, 0)
         self.gdrive_link_input = QLineEdit("")
         self.gdrive_link_input.setPlaceholderText("https://drive.google.com/drive/folders/...")
-        bottom_grid.addWidget(self.gdrive_link_input, 1, 1)
+        bottom_grid.addWidget(self.gdrive_link_input, 1, 1, 1, 2)
         
-        bottom_grid.addWidget(QLabel("<b>Auth Method:</b>"), 1, 2)
+        bottom_grid.addWidget(QLabel("<b>Auth Method:</b>"), 1, 3)
         self.gdrive_auth_cb = QComboBox()
         self.gdrive_auth_cb.addItems(["OAuth 2.0 (User Login)", "Service Account (Robot)"])
-        bottom_grid.addWidget(self.gdrive_auth_cb, 1, 3)
+        bottom_grid.addWidget(self.gdrive_auth_cb, 1, 4)
         
         self.gdrive_help_btn = QPushButton("Help")
         self.gdrive_help_btn.setStyleSheet("font-weight: bold; background-color: #6c757d; color: white;")
         self.gdrive_help_btn.clicked.connect(self.show_gdrive_help)
-        bottom_grid.addWidget(self.gdrive_help_btn, 1, 4)
+        bottom_grid.addWidget(self.gdrive_help_btn, 1, 5)
 
         main_lay.addLayout(bottom_grid)
         
@@ -715,30 +768,39 @@ class DAQControlApp(QWidget):
             cfg = self.master_channel_configs[raw_name]
             base_name = self._signal_base_name(raw_name)
             dev_name = self._signal_device_name(raw_name) or dev_prefix
-            ch_label = self._make_channel_label(dev_name, base_name)
+            is_dmm = (base_name == "DMM")
+            ch_label = QLabel("DMM") if is_dmm else self._make_channel_label(dev_name, base_name)
             custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
             term_cb = QComboBox()
-            if self._ai_index(base_name) >= 16:
-                term_cb.addItems(term_options_high)
-                if cfg.get("term", "RSE") == "DIFF": term_cb.setCurrentText("RSE")
-                else: term_cb.setCurrentText(cfg.get("term", "RSE"))
-            else: 
-                term_cb.addItems(term_options)
-                term_cb.setCurrentText(cfg.get("term", "DIFF"))
-                
             range_cb = QComboBox()
-            range_cb.addItems(range_options)
-            range_cb.setCurrentText(cfg.get("range", "-10 to 10"))
-            
             sensor_cb = QComboBox()
-            sensor_cb.addItems(sensor_options)
-            
+
+            if not is_dmm:
+                if self._ai_index(base_name) >= 16:
+                    term_cb.addItems(term_options_high)
+                    if cfg.get("term", "RSE") == "DIFF": term_cb.setCurrentText("RSE")
+                    else: term_cb.setCurrentText(cfg.get("term", "RSE"))
+                else:
+                    term_cb.addItems(term_options)
+                    term_cb.setCurrentText(cfg.get("term", "DIFF"))
+
+                range_cb.addItems(range_options)
+                range_cb.setCurrentText(cfg.get("range", "-10 to 10"))
+                sensor_cb.addItems(sensor_options)
+            else:
+                term_cb.setEnabled(False)
+                range_cb.setEnabled(False)
+                sensor_cb.setEnabled(False)
+
             scale_input = QLineEdit(cfg.get("scale", "1.0"))
             unit_input = QLineEdit(cfg.get("unit", "V"))
             offset_input = QLineEdit(cfg.get("offset", "0.0"))
 
             zero_btn = QPushButton("Zero")
-            zero_btn.clicked.connect(functools.partial(self.calibrate_single_offset, raw_name, scale_input, offset_input, term_cb, range_cb, sensor_cb))
+            if is_dmm:
+                zero_btn.setEnabled(False)
+            else:
+                zero_btn.clicked.connect(functools.partial(self.calibrate_single_offset, raw_name, scale_input, offset_input, term_cb, range_cb, sensor_cb))
             
             lpf_cb = QCheckBox()
             lpf_cb.setChecked(cfg.get("lpf_on", False))
@@ -747,8 +809,9 @@ class DAQControlApp(QWidget):
             lpf_ord.addItems(["2", "4", "6"])
             lpf_ord.setCurrentText(str(cfg.get("lpf_order", "4")))
 
-            sensor_cb.currentIndexChanged.connect(make_sensor_callback(sensor_cb, unit_input))
-            sensor_cb.setCurrentText(cfg.get("sensor", "None")) 
+            if not is_dmm:
+                sensor_cb.currentIndexChanged.connect(make_sensor_callback(sensor_cb, unit_input))
+                sensor_cb.setCurrentText(cfg.get("sensor", "None"))
 
             self.config_grid.addWidget(ch_label, row_idx, 0)
             self.config_grid.addWidget(custom_name_input, row_idx, 1)
@@ -850,7 +913,7 @@ class DAQControlApp(QWidget):
             raw, custom = cfg['Name'], cfg['CustomName']
             ind_mapping.append((raw, custom))
             sub_mapping.append((raw, f"{custom} ({raw})"))
-        if "DMM" in self.available_signals:
+        if "DMM" in self.available_signals and all(cfg["Name"] != "DMM" for cfg in self.active_channel_configs):
             ind_mapping.append(("DMM", "DMM"))
             sub_mapping.append(("DMM", "DMM (DMM)"))
         for sub in self.subplot_widgets: sub.update_mapping(sub_mapping)
@@ -869,7 +932,7 @@ class DAQControlApp(QWidget):
     def add_indicator(self, default_signal="AI0", default_type="Current (100ms avg)"):
         ind_mapping = []
         for cfg in self.active_channel_configs: ind_mapping.append((cfg['Name'], cfg['CustomName']))
-        if "DMM" in self.available_signals: ind_mapping.append(("DMM", "DMM"))
+        if "DMM" in self.available_signals and all(cfg["Name"] != "DMM" for cfg in self.active_channel_configs): ind_mapping.append(("DMM", "DMM"))
         widget = NumericalIndicatorWidget(ind_mapping, self.remove_indicator)
         idx = widget.signal_cb.findData(default_signal)
         if idx >= 0: widget.signal_cb.setCurrentIndex(idx)
@@ -886,7 +949,7 @@ class DAQControlApp(QWidget):
         idx = len(self.subplot_widgets)
         sub_mapping = []
         for cfg in self.active_channel_configs: sub_mapping.append((cfg['Name'], f"{cfg['CustomName']} ({cfg['Name']})"))
-        if "DMM" in self.available_signals: sub_mapping.append(("DMM", "DMM (DMM)"))
+        if "DMM" in self.available_signals and all(cfg["Name"] != "DMM" for cfg in self.active_channel_configs): sub_mapping.append(("DMM", "DMM (DMM)"))
         widget = SubplotConfigWidget(idx, sub_mapping, self.remove_subplot, self.flag_plot_rebuild)
         if default_signals: widget.set_selected_signals(default_signals)
         self.plot_scroll_layout.insertWidget(len(self.subplot_widgets), widget)
@@ -912,7 +975,10 @@ class DAQControlApp(QWidget):
                 "window_width": self.width(),
                 "window_height": self.height(),
                 "threshold": self.threshold_input.text(),
-                "dmm_ip": self.Keithley_DMM_IP.text(),
+                "dmm_ip": self.keithley_dmm_ip,
+                "dmm_rate_hz": self.Keithley_DMM_rate.text(),
+                "dmm_timeout_s": self.Keithley_DMM_timeout.text(),
+                "dmm_backend": self.Keithley_backend_cb.currentText(),
                 "gdrive_link": self.gdrive_link_input.text(),
                 "gdrive_auth": self.gdrive_auth_cb.currentText(),
                 "simulate": self.simulate_mode,
@@ -947,7 +1013,12 @@ class DAQControlApp(QWidget):
                 try: self.resize(int(main_cfg["window_width"]), int(main_cfg["window_height"]))
                 except (TypeError, ValueError): pass
             if "threshold" in main_cfg: self.threshold_input.setText(main_cfg["threshold"])
-            if "dmm_ip" in main_cfg: self.Keithley_DMM_IP.setText(main_cfg["dmm_ip"])
+            if "dmm_ip" in main_cfg: self.keithley_dmm_ip = main_cfg["dmm_ip"]
+            if "dmm_rate_hz" in main_cfg: self.Keithley_DMM_rate.setText(main_cfg["dmm_rate_hz"])
+            if "dmm_timeout_s" in main_cfg: self.Keithley_DMM_timeout.setText(main_cfg["dmm_timeout_s"])
+            if "dmm_backend" in main_cfg:
+                idx = self.Keithley_backend_cb.findText(main_cfg["dmm_backend"])
+                if idx >= 0: self.Keithley_backend_cb.setCurrentIndex(idx)
             if "gdrive_link" in main_cfg: self.gdrive_link_input.setText(main_cfg["gdrive_link"])
             
             if "gdrive_auth" in main_cfg: 
@@ -1017,14 +1088,26 @@ class DAQControlApp(QWidget):
             t_cb_text = ch['term_cb'].currentText() if 'term_cb' in ch and ch['term_cb'].count() > 0 else "RSE"
             r_cb_text = ch['range_cb'].currentText() if 'range_cb' in ch and ch['range_cb'].count() > 0 else "-10 to 10"
 
+            if ch['name'] == 'DMM':
+                kind = 'DMM'
+                terminal = 'DMM'
+                cfg_value = None
+                range_value = (-10.0, 10.0)
+                sensor_type = 'None'
+            else:
+                kind = 'AI' if self._is_ai_signal(ch['name']) else 'AO'
+                terminal = f"{dev_name}/{base_name.lower()}"
+                cfg_value = config_map.get(t_cb_text, TerminalConfiguration.RSE)
+                range_value = parse_range(r_cb_text)
+
             daq_configs.append({
-                'Name': ch['name'], 'Terminal': f"{dev_name}/{base_name.lower()}",
+                'Name': ch['name'], 'Terminal': terminal,
                 'CustomName': ch['custom_name_input'].text().strip() or ch['name'],
-                'Config': config_map.get(t_cb_text, TerminalConfiguration.RSE),
-                'Range': parse_range(r_cb_text),
+                'Config': cfg_value,
+                'Range': range_value,
                 'SensorType': sensor_type, 'Scale': scale_val,
                 'Unit': ch['unit_input'].text().strip(), 'Offset': offset_val,
-                'Kind': 'AI' if self._is_ai_signal(ch['name']) else 'AO',
+                'Kind': kind,
                 'LPF_On': lpf_on, 'LPF_Cutoff': lpf_cut, 'LPF_Order': lpf_ord
             })
         return daq_configs
@@ -1072,7 +1155,9 @@ class DAQControlApp(QWidget):
         try: average_samples = max(1, int(self.average_samples_input.text()))
         except ValueError: average_samples = 100
         samples_per_read = max(1, int(read_rate // 10)) 
-        
+        try: dmm_rate_hz = max(1.0, float(self.Keithley_DMM_rate.text()))
+        except ValueError: dmm_rate_hz = 100.0
+
         simulate = self.simulate_mode
         has_dmm = "DMM" in self.available_signals
         n_ai = len(active_ai_configs)
@@ -1082,7 +1167,7 @@ class DAQControlApp(QWidget):
         self.daq_process = mp.Process(target=daq_read_worker, args=(
             self.mp_stop_flag, simulate, read_rate, samples_per_read, active_ai_configs, 
             n_ai, n_ao, active_ao_signals, has_dmm, self.available_signals, self.ao_state_dict, self.dmm_buffer_list, 
-            self.tdms_queue, self.process_queue))
+            self.tdms_queue, self.process_queue, dmm_rate_hz))
             
         self.math_process = mp.Process(target=math_processing_worker, args=(
             self.mp_stop_flag, read_rate, average_samples, self.available_signals, 
@@ -1116,7 +1201,7 @@ class DAQControlApp(QWidget):
     def tdms_writer_thread_func(self):
         filename = self.generate_filename("raw_data")
         self.current_tdms_filepath = str(filename)
-        active_ai = [s for s in self.available_signals if self._is_ai_signal(s)]
+        active_ai = [c["Name"] for c in self.active_channel_configs if c.get("Kind") == "AI"]
         active_ao = [s for s in self.available_signals if self._is_ao_signal(s)]
         has_dmm = "DMM" in self.available_signals
 
@@ -1150,24 +1235,32 @@ class DAQControlApp(QWidget):
     def DMM_read(self):
         if "DMM" not in self.available_signals:
             return
+        try: dmm_rate_hz = max(1.0, float(self.Keithley_DMM_rate.text()))
+        except ValueError: dmm_rate_hz = 100.0
+        try: dmm_timeout_s = max(0.05, float(self.Keithley_DMM_timeout.text()))
+        except ValueError: dmm_timeout_s = 1.0
+        dt_s = 1.0 / dmm_rate_hz
+        backend = self.Keithley_backend_cb.currentText().lower()
+
         if self.simulate_mode:
             while not self.mp_stop_flag.is_set():
                 self.dmm_buffer_list.append(float(np.random.uniform(-0.1, 0.1)))
-                time.sleep(0.1)
+                time.sleep(dt_s)
             return
 
         inst = None
         try:
-            inst = DMM6510readout.write_script_to_Keithley(self.Keithley_DMM_IP.text(), "0.05")
+            use_pkg = "keithley_daq6510" in backend
+            inst = DMM6510readout.write_script_to_Keithley(self.keithley_dmm_ip, f"{dt_s:.6g}", timeout_s=dmm_timeout_s, prefer_keithley_pkg=use_pkg)
             while not self.mp_stop_flag.is_set():
                 try:
                     self.dmm_buffer_list.append(float(DMM6510readout.read_data(inst)))
                 except (TypeError, ValueError) as exc:
                     self._log_exception("Invalid DMM data received", exc, key="dmm_read_data", interval_sec=10.0)
-                    time.sleep(0.05)
+                    time.sleep(dt_s)
                 except (OSError, RuntimeError) as exc:
                     self._log_exception("DMM read transport error", exc, key="dmm_transport", interval_sec=10.0)
-                    time.sleep(0.1)
+                    time.sleep(min(0.2, max(dt_s, 0.02)))
         except (OSError, RuntimeError, ValueError) as exc:
             self._log_exception("Failed to initialize DMM readout", exc, key="dmm_init", interval_sec=10.0)
             self._set_shutdown_status("Status: DMM read failure", color="red")
@@ -1203,8 +1296,10 @@ class DAQControlApp(QWidget):
         current_configs = self.active_channel_configs
         units = {cfg["Name"]: cfg["Unit"] for cfg in current_configs}
         custom_names = {cfg["Name"]: cfg["CustomName"] for cfg in current_configs}
-        units["DMM"] = "V" 
-        custom_names["DMM"] = "DMM"
+        if "DMM" not in units:
+            units["DMM"] = "V"
+        if "DMM" not in custom_names:
+            custom_names["DMM"] = "DMM"
         
         math_sigs = set()
         for ind in self.indicator_widgets:
