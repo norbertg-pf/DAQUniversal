@@ -13,6 +13,7 @@ hiddenimports = [
     "nidaqmx.system",
     "nptdms",
     "pyvisa",
+    "keithley_daq6510",
     "scipy",
     "numpy",
 ] + collect_submodules("pyqtgraph")
@@ -22,7 +23,6 @@ a = Analysis(
     pathex=["."],
     binaries=[],
     datas=[
-        ("DMM6510.tsp", "."),
         ("daq_config.json", "."),
     ] + copy_metadata("nitypes") + copy_metadata("nidaqmx"),
     hiddenimports=hiddenimports,

@@ -50,6 +50,8 @@ from ui_components import (
     SubplotConfigWidget,
 )
 
+from keithley_adapter import KeithleyAdapter
+
 
 
 class DAQControlApp(QWidget):
@@ -1156,12 +1158,13 @@ class DAQControlApp(QWidget):
                 time.sleep(0.1)
             return
 
-        inst = None
+        dmm = None
         try:
-            inst = DMM6510readout.write_script_to_Keithley(self.Keithley_DMM_IP.text(), "0.05")
+            dmm = KeithleyAdapter(self.Keithley_DMM_IP.text(), sample_interval_s=0.05)
+            dmm.connect()
             while not self.mp_stop_flag.is_set():
                 try:
-                    self.dmm_buffer_list.append(float(DMM6510readout.read_data(inst)))
+                    self.dmm_buffer_list.append(float(dmm.read()))
                 except (TypeError, ValueError) as exc:
                     self._log_exception("Invalid DMM data received", exc, key="dmm_read_data", interval_sec=10.0)
                     time.sleep(0.05)
@@ -1172,9 +1175,9 @@ class DAQControlApp(QWidget):
             self._log_exception("Failed to initialize DMM readout", exc, key="dmm_init", interval_sec=10.0)
             self._set_shutdown_status("Status: DMM read failure", color="red")
         finally:
-            if inst is not None:
+            if dmm is not None:
                 try:
-                    DMM6510readout.stop_instrument(inst)
+                    dmm.close()
                 except (OSError, RuntimeError, AttributeError) as exc:
                     self._log_exception("Failed to stop DMM instrument", exc, key="dmm_stop", interval_sec=30.0)
 
