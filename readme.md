@@ -13,6 +13,5 @@ The DAQ channel layout is profile-driven and selected automatically from the cho
 
 - The app detects device type (for example `USB-6453` or `PXIe-6381`) from NI device info.
 - The active AI/AO channel set is updated automatically for that selected device.
-- You no longer need to edit Python files to switch hardware.
 
 If you add support for a new NI card, add its profile and aliases in `hardware_profiles.py`.
