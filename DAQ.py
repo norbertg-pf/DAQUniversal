@@ -192,7 +192,12 @@ class DAQControlApp(QWidget):
         return self.device_cb.currentData() == self.MATH_DEVICE_ID
 
     def _is_dmm_device_selected(self):
-        return self.device_cb.currentData() == self.DMM_DEVICE_ID
+        if self.device_cb.currentData() == self.DMM_DEVICE_ID:
+            return True
+        try:
+            return self.device_cb.currentText().startswith("DMM (External)")
+        except Exception:
+            return False
 
     def _is_simulated_device_selected(self):
         dev_name = self.device_cb.currentData() or ""
