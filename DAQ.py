@@ -79,8 +79,8 @@ class DAQControlApp(QWidget):
         self.write_task = None
         self.write_task_lock = threading.Lock()
 
-        # Simulation mode is intentionally always enabled.
         self.simulate_mode = True
+        self.simulate_mode_from_config = False
         self.history_lock = threading.Lock() 
 
         self.start_timestamp = None
@@ -140,6 +140,49 @@ class DAQControlApp(QWidget):
                 do_init.close()
         except Exception as e:
             print(f"[WARN] DAQ Hardware not found at startup: {e}.")
+
+    def has_real_hardware(self):
+        return any("simulated" not in (ptype or "").lower() for ptype in self.device_product_types.values())
+
+    def get_default_simulate_mode(self):
+        return not self.has_real_hardware()
+
+    def is_acquisition_active(self):
+        read_active = (
+            (self.daq_process and self.daq_process.is_alive()) or
+            (self.math_process and self.math_process.is_alive()) or
+            (self.DMMread_thread and self.DMMread_thread.is_alive()) or
+            (self.tdms_writer_thread and self.tdms_writer_thread.is_alive())
+        )
+        write_active = False
+        with self.write_task_lock:
+            write_active = self.write_task is not None
+        return read_active or write_active
+
+    def update_simulation_ui(self):
+        if hasattr(self, "simulation_note_label"):
+            if self.simulate_mode:
+                self.simulation_note_label.setText("SIMULATION MODE")
+                self.simulation_note_label.setStyleSheet("color: red; font-weight: bold;")
+            else:
+                self.simulation_note_label.setText("HARDWARE MODE")
+                self.simulation_note_label.setStyleSheet("color: green; font-weight: bold;")
+        if hasattr(self, "simulate_mode_cb"):
+            self.simulate_mode_cb.blockSignals(True)
+            self.simulate_mode_cb.setChecked(self.simulate_mode)
+            self.simulate_mode_cb.blockSignals(False)
+
+    def on_simulate_mode_toggled(self, checked):
+        if self.is_acquisition_active():
+            QMessageBox.warning(
+                self,
+                "Cannot Switch Mode",
+                "Stop active read/write operations before changing Simulation Mode.",
+            )
+            self.update_simulation_ui()
+            return
+        self.simulate_mode = bool(checked)
+        self.update_simulation_ui()
 
     def get_default_channel_config(self, raw_name):
         term = "RSE" if raw_name.startswith("AI") and int(raw_name[2:]) >= 16 else "DIFF"
@@ -348,6 +391,10 @@ class DAQControlApp(QWidget):
             self.device_cb.setCurrentIndex(idx_to_set)
             self.on_device_changed(self.device_cb.currentIndex())
 
+        if not self.simulate_mode_from_config:
+            self.simulate_mode = self.get_default_simulate_mode()
+        self.update_simulation_ui()
+
     def get_selected_device_profile(self):
         dev_name = self.device_cb.currentData() or ""
         product_type = self.device_product_types.get(dev_name, "")
@@ -459,6 +506,9 @@ class DAQControlApp(QWidget):
         self.refresh_dev_btn = QPushButton("Refresh Devices")
         self.refresh_dev_btn.clicked.connect(self.refresh_devices)
         dev_layout.addWidget(self.refresh_dev_btn)
+        self.simulate_mode_cb = QCheckBox("Simulation Mode")
+        self.simulate_mode_cb.toggled.connect(self.on_simulate_mode_toggled)
+        dev_layout.addWidget(self.simulate_mode_cb)
         dev_layout.addSpacing(20)
         self.select_ch_btn = QPushButton("Select Active Channels")
         self.select_ch_btn.setStyleSheet("font-weight: bold; background-color: #17a2b8; color: white; padding: 6px;")
@@ -789,6 +839,9 @@ class DAQControlApp(QWidget):
 
     def load_config(self):
         if not os.path.exists("daq_config.json"): 
+            self.simulate_mode = self.get_default_simulate_mode()
+            self.simulate_mode_from_config = False
+            self.update_simulation_ui()
             self.add_subplot(["AI0", "AI1"]); self.add_subplot(["AI2", "AI3"]); self.add_indicator("AI0", "RMS")
             return False
             
@@ -813,6 +866,14 @@ class DAQControlApp(QWidget):
                 idx = self.gdrive_auth_cb.findText(main_cfg["gdrive_auth"])
                 if idx >= 0: self.gdrive_auth_cb.setCurrentIndex(idx)
 
+            if "simulate" in main_cfg:
+                self.simulate_mode = bool(main_cfg["simulate"])
+                self.simulate_mode_from_config = True
+            else:
+                self.simulate_mode = self.get_default_simulate_mode()
+                self.simulate_mode_from_config = False
+            self.update_simulation_ui()
+
             if "output_folder" in main_cfg: 
                 self.output_folder = main_cfg["output_folder"]
                 self.folder_display.setText(f"Output Folder: ..{self.output_folder[-30:]}")
@@ -834,7 +895,11 @@ class DAQControlApp(QWidget):
             for sub_signals in config.get("subplots", []): self.add_subplot(sub_signals)
             for ind_cfg in config.get("indicators", []): self.add_indicator(ind_cfg.get("signal", "AI0"), ind_cfg.get("type", "RMS"))
             return True
-        except Exception: return False
+        except Exception:
+            self.simulate_mode = self.get_default_simulate_mode()
+            self.simulate_mode_from_config = False
+            self.update_simulation_ui()
+            return False
 
     def get_current_channel_configs(self):
         config_map = {
