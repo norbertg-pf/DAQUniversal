@@ -527,19 +527,31 @@ class DAQControlApp(QWidget):
         if self._is_math_device_selected():
             allowed_signals = [f"MATH{i}" for i in range(4)]
             active_signals = [s for s in self.available_signals if s.startswith("MATH")]
+            show_dmm_ip = False
         elif self._is_dmm_device_selected():
             allowed_signals = ["DMM"]
             active_signals = [s for s in self.available_signals if s == "DMM"]
+            show_dmm_ip = True
         else:
             allowed_signals = []
             for dev in self.detected_devices:
                 allowed_signals.extend(self._channels_for_device(dev))
-            allowed_signals.append("DMM")
             active_signals = [s for s in self.available_signals if s in allowed_signals]
+            show_dmm_ip = False
 
-        dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals)
+        dialog = ChannelSelectionDialog(
+            active_signals,
+            self,
+            allowed_signals=allowed_signals,
+            show_dmm_ip=show_dmm_ip,
+            dmm_ip=self._safe_qline_text(getattr(self, "Keithley_DMM_IP", None), default=""),
+        )
         if dialog.exec_():
             selected = dialog.get_selected()
+            if self._is_dmm_device_selected():
+                new_ip = dialog.get_dmm_ip()
+                if new_ip and hasattr(self, "Keithley_DMM_IP"):
+                    self.Keithley_DMM_IP.setText(new_ip)
             if len(selected) == 0:
                 self.available_signals = []
             elif self._is_math_device_selected():

@@ -128,12 +128,13 @@ class MathHelpDialog(QDialog):
 # =============================================================================
 
 class ChannelSelectionDialog(QDialog):
-    def __init__(self, active_signals, parent=None, allowed_signals=None):
+    def __init__(self, active_signals, parent=None, allowed_signals=None, show_dmm_ip=False, dmm_ip=""):
         super().__init__(parent)
         self.setWindowTitle("Select Active Channels")
         self.setMinimumWidth(800)
         layout = QVBoxLayout(self)
         self.checkboxes = {}
+        self.dmm_ip_input = None
         allowed = list(allowed_signals) if allowed_signals is not None else list(ALL_CHANNELS)
 
         def split_sig(sig):
@@ -166,6 +167,26 @@ class ChannelSelectionDialog(QDialog):
                 if c > 3:
                     c = 0
                     r += 1
+
+            if "DMM" in allowed:
+                cb = QCheckBox("DMM (Keithley)")
+                cb.setChecked("DMM" in active_signals)
+                self.checkboxes["DMM"] = cb
+                ai_layout.addWidget(cb, r, c)
+                c += 1
+                if c > 3:
+                    c = 0
+                    r += 1
+
+            if show_dmm_ip:
+                ai_layout.addWidget(QLabel("Keithley DMM IP:"), r, c)
+                c += 1
+                if c > 3:
+                    c = 0
+                    r += 1
+                self.dmm_ip_input = QLineEdit(dmm_ip)
+                self.dmm_ip_input.setPlaceholderText("169.254.169.37")
+                ai_layout.addWidget(self.dmm_ip_input, r, c, 1, max(1, 4 - c))
             ai_group.setLayout(ai_layout)
             layout.addWidget(ai_group)
 
@@ -201,16 +222,6 @@ class ChannelSelectionDialog(QDialog):
             math_group.setLayout(math_layout)
             layout.addWidget(math_group)
 
-        if "DMM" in allowed:
-            dmm_group = QGroupBox("External Devices")
-            dmm_layout = QVBoxLayout()
-            cb = QCheckBox("DMM")
-            cb.setChecked("DMM" in active_signals)
-            self.checkboxes["DMM"] = cb
-            dmm_layout.addWidget(cb)
-            dmm_group.setLayout(dmm_layout)
-            layout.addWidget(dmm_group)
-
         btns = QHBoxLayout()
         ok_btn = QPushButton("Apply Configuration")
         ok_btn.setStyleSheet("font-weight: bold; background-color: #0078D7; color: white; padding: 5px;")
@@ -221,6 +232,11 @@ class ChannelSelectionDialog(QDialog):
 
     def get_selected(self):
         return [sig for sig, cb in self.checkboxes.items() if cb.isChecked()]
+
+    def get_dmm_ip(self):
+        if self.dmm_ip_input is None:
+            return ""
+        return self.dmm_ip_input.text().strip()
 
 class ExportDialog(QDialog):
     def __init__(self, parent=None):
