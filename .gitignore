@@ -224,3 +224,5 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+# Keep checked-in PyInstaller spec for this project
+!DAQ_ui.spec
