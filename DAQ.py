@@ -1154,6 +1154,8 @@ class DAQControlApp(QWidget):
         self.available_signals = kept_hw + kept_math
 
     def on_device_changed(self, _):
+        if not hasattr(self, "config_grid"):
+            return
         self.apply_selected_device_profile()
         new_device = self.device_cb.currentData()
         if not new_device:
@@ -1239,7 +1241,6 @@ class DAQControlApp(QWidget):
         dev_layout = QHBoxLayout()
         dev_layout.addWidget(QLabel("<b>DAQ Device:</b>"))
         self.device_cb = QComboBox()
-        self.refresh_devices()
         self.device_cb.currentIndexChanged.connect(self.on_device_changed)
         dev_layout.addWidget(self.device_cb)
         self.refresh_dev_btn = QPushButton("Refresh Devices")
@@ -1313,6 +1314,9 @@ class DAQControlApp(QWidget):
         bottom_hlay.addStretch()
         bottom_hlay.addWidget(self.apply_config_btn)
         main_lay.addLayout(bottom_hlay)
+
+        # Populate devices only after config widgets/layouts exist
+        self.refresh_devices()
         self.rebuild_config_tab()
 
     def show_gdrive_help(self):
