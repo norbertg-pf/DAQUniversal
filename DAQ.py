@@ -21,7 +21,7 @@ from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread
 import pyqtgraph as pg
 pg.setConfigOption('background', 'w')  # Set white background to match Matplotlib
 pg.setConfigOption('foreground', 'k')  # Set black axes/text
-pg.setConfigOption('antialias', True)
+pg.setConfigOption('antialias', False)  # Keep real-time rendering fast
 
 from nptdms import TdmsWriter, ChannelObject, TdmsFile
 from datetime import datetime
@@ -1317,6 +1317,7 @@ class DAQControlApp(QWidget):
 
 # --- PYQTGRAPH REPLACEMENT FOR MATPLOTLIB ---
         self.graph_layout = pg.GraphicsLayoutWidget()
+        self.graph_layout.setViewportUpdateMode(self.graph_layout.MinimalViewportUpdate)
         self.graph_layout.setStyleSheet("background-color: #f7f9fc; border: 1px solid #d9dee8; border-radius: 6px;")
         self.plots = []
         self.curves = {}
@@ -2058,14 +2059,10 @@ class DAQControlApp(QWidget):
             if n > 0:
                 for i in range(n):
                     p = self.graph_layout.addPlot(row=i, col=0)
-                    p.setTitle(f"Subplot {i + 1}", color='#3c4558', size='10pt')
                     p.showGrid(x=True, y=True, alpha=0.3)
                     p.setClipToView(True)
-                    p.setDownsampling(mode='peak')
                     p.getViewBox().setDefaultPadding(0.02)
                     p.getAxis('left').setWidth(80)
-                    p.getAxis('left').setStyle(tickFont=pg.QtGui.QFont("Arial", 9))
-                    p.getAxis('bottom').setStyle(tickFont=pg.QtGui.QFont("Arial", 9))
                     p.setMinimumHeight(180)
                     
                     # 2. Link X-axes so zooming/panning one zooms all of them seamlessly!
@@ -2101,7 +2098,7 @@ class DAQControlApp(QWidget):
                     
                     # Pin legend inside the plot cleanly
                     if selected_raw_signals: 
-                        p.addLegend(offset=(-10, 10), verSpacing=2, brush=(255, 255, 255, 200), pen=pg.mkPen((180, 180, 180), width=1))
+                        p.addLegend(offset=(10, 10))
             
             self.needs_plot_rebuild = False
 
