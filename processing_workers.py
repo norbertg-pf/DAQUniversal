@@ -3,7 +3,7 @@ import time
 import numpy as np
 import nidaqmx
 from nidaqmx import stream_readers
-from nidaqmx.constants import AcquisitionType, ProductCategory, ThermocoupleType
+from nidaqmx.constants import AcquisitionType, CJCSource, ProductCategory, ThermocoupleType
 import scipy.signal as signal
 
 
@@ -82,10 +82,19 @@ def daq_read_worker(stop_event, simulate, read_rate, samples_per_read, active_ai
         if n_ai > 0:
             task = nidaqmx.Task()
             for ch in active_ai_configs:
-                if ch.get('SensorType') == "Type K": 
-                    task.ai_channels.add_ai_thrmcpl_chan(ch['Terminal'], thermocouple_type=ThermocoupleType.K, cjc_source=CJCSource.BUILT_IN)
+                channel_name = ch.get('Terminal', '<unknown channel>')
+                if ch.get('SensorType') == "Type K":
+                    try:
+                        task.ai_channels.add_ai_thrmcpl_chan(
+                            channel_name,
+                            thermocouple_type=ThermocoupleType.K,
+                            cjc_source=CJCSource.BUILT_IN,
+                        )
+                    except Exception as e:
+                        print(f"[ERROR] Failed to configure thermocouple channel '{channel_name}': {e}")
+                        raise RuntimeError(f"Invalid thermocouple configuration for channel '{channel_name}'") from e
                 else: 
-                    task.ai_channels.add_ai_voltage_chan(ch['Terminal'], terminal_config=ch['Config'], min_val=ch['Range'][0], max_val=ch['Range'][1])
+                    task.ai_channels.add_ai_voltage_chan(channel_name, terminal_config=ch['Config'], min_val=ch['Range'][0], max_val=ch['Range'][1])
             task.timing.cfg_samp_clk_timing(rate=read_rate, sample_mode=AcquisitionType.CONTINUOUS, samps_per_chan=int(read_rate * 10))
             stream_reader = stream_readers.AnalogMultiChannelReader(task.in_stream)
             task.start()
