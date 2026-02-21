@@ -31,7 +31,7 @@ def get_terminal_name_with_dev_prefix(task: nidaqmx.Task, terminal_name: str) ->
 
 def daq_read_worker(stop_event, simulate, read_rate, samples_per_read, active_ai_configs,
                     n_ai, n_ao, active_ao_signals, has_dmm, available_signals, ao_state_dict, dmm_buffer_list,
-                    tdms_q, process_q):
+                    tdms_q, process_q, dmm_nominal_rate_hz=100.0):
     """ Runs on Core 2: Handles hardware communication and pulls raw arrays. """
     sample_nr = 0
     safe_timeout = (samples_per_read / read_rate) + 2.0
@@ -45,19 +45,31 @@ def daq_read_worker(stop_event, simulate, read_rate, samples_per_read, active_ai
         ao_vals = np.array([ao_state_dict.get(sig, 0.0) for sig in active_ao_signals], dtype=np.float64)
         return np.repeat(ao_vals[:, None], samples_per_read, axis=1)
 
+    last_dmm_value = 0.0
+
     def build_dmm_chunk():
+        nonlocal last_dmm_value
         if not has_dmm:
             return np.empty((0, samples_per_read))
-        dmm_data = np.asarray(list(dmm_buffer_list))
+
+        dmm_data = np.asarray(list(dmm_buffer_list), dtype=np.float64)
         del dmm_buffer_list[:]
-        if len(dmm_data) == 0:
-            dmm_chunk = np.zeros(samples_per_read)
-        elif len(dmm_data) < samples_per_read:
-            reps = samples_per_read // len(dmm_data)
-            dmm_chunk = np.concatenate([np.repeat(dmm_data, reps), np.repeat(dmm_data[-1], samples_per_read - len(dmm_data) * reps)])
+
+        if dmm_data.size > 0:
+            last_dmm_value = float(dmm_data[-1])
+
+        dup_factor = max(1, int(round(read_rate / max(dmm_nominal_rate_hz, 1e-6))))
+
+        if dmm_data.size == 0:
+            dmm_chunk = np.full(samples_per_read, last_dmm_value, dtype=np.float64)
         else:
-            idx = np.linspace(0, len(dmm_data), samples_per_read + 1, endpoint=True).astype(int)
-            dmm_chunk = np.array([dmm_data[idx[i]:idx[i+1]].mean() if len(dmm_data[idx[i]:idx[i+1]]) > 0 else 0.0 for i in range(samples_per_read)])
+            expanded = np.repeat(dmm_data, dup_factor)
+            if expanded.size >= samples_per_read:
+                dmm_chunk = expanded[:samples_per_read]
+            else:
+                pad = np.full(samples_per_read - expanded.size, last_dmm_value, dtype=np.float64)
+                dmm_chunk = np.concatenate((expanded, pad))
+
         return dmm_chunk.reshape(1, -1)
 
     try:
