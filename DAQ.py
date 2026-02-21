@@ -671,6 +671,15 @@ class DAQControlApp(QWidget):
         dialog = MathHelpDialog(self, available_vars=available_vars)
         dialog.exec_()
 
+    def _make_channel_label(self, device_name, base_name, max_width=280):
+        full_text = f"{self._device_display_name(device_name)}/{base_name.lower()} ({base_name})"
+        label = QLabel()
+        label.setToolTip(full_text)
+        label.setMinimumWidth(max_width)
+        label.setMaximumWidth(max_width)
+        label.setText(label.fontMetrics().elidedText(full_text, Qt.ElideRight, max_width))
+        return label
+
     def rebuild_config_tab(self):
         self._clear_layout_recursive(self.config_grid)
 
@@ -706,7 +715,7 @@ class DAQControlApp(QWidget):
             cfg = self.master_channel_configs[raw_name]
             base_name = self._signal_base_name(raw_name)
             dev_name = self._signal_device_name(raw_name) or dev_prefix
-            ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
+            ch_label = self._make_channel_label(dev_name, base_name)
             custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
             term_cb = QComboBox()
             if self._ai_index(base_name) >= 16:
@@ -778,7 +787,7 @@ class DAQControlApp(QWidget):
                 cfg = self.master_channel_configs[raw_name]
                 base_name = self._signal_base_name(raw_name)
                 dev_name = self._signal_device_name(raw_name) or dev_prefix
-                ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
+                ch_label = self._make_channel_label(dev_name, base_name)
                 custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
                 unit_input = QLineEdit("V")
                 unit_input.setEnabled(False)
