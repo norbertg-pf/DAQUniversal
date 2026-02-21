@@ -181,7 +181,7 @@ class DAQControlApp(QWidget):
         base = self._signal_base_name(raw_name)
         term = "RSE" if base.startswith("AI") and self._ai_index(base) >= 16 else "DIFF"
         return {
-            "custom_name": raw_name, "term": term, "range": "-10 to 10",
+            "custom_name": base, "term": term, "range": "-10 to 10",
             "sensor": "None", "scale": "1.0", "unit": "V", "offset": "0.0",
             "lpf_on": False, "lpf_cutoff": "10.0", "lpf_order": "4",
             "expression": "AI0 - AI1"
@@ -667,7 +667,8 @@ class DAQControlApp(QWidget):
         dialog.exec_()
         
     def show_math_help(self):
-        dialog = MathHelpDialog(self)
+        available_vars = [self._signal_base_name(sig) for sig in self.available_signals if not sig.startswith("MATH")]
+        dialog = MathHelpDialog(self, available_vars=available_vars)
         dialog.exec_()
 
     def rebuild_config_tab(self):
@@ -705,7 +706,7 @@ class DAQControlApp(QWidget):
             cfg = self.master_channel_configs[raw_name]
             base_name = self._signal_base_name(raw_name)
             dev_name = self._signal_device_name(raw_name) or dev_prefix
-            ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({raw_name})")
+            ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
             custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
             term_cb = QComboBox()
             if self._ai_index(base_name) >= 16:
@@ -777,7 +778,7 @@ class DAQControlApp(QWidget):
                 cfg = self.master_channel_configs[raw_name]
                 base_name = self._signal_base_name(raw_name)
                 dev_name = self._signal_device_name(raw_name) or dev_prefix
-                ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({raw_name})")
+                ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
                 custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
                 unit_input = QLineEdit("V")
                 unit_input.setEnabled(False)

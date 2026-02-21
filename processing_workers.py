@@ -7,6 +7,18 @@ from nidaqmx.constants import AcquisitionType, CJCSource, ProductCategory, Therm
 import scipy.signal as signal
 
 
+def _base_signal_name(sig_name: str) -> str:
+    return sig_name.split("@", 1)[0] if "@" in sig_name else sig_name
+
+
+def _qualified_eval_alias(sig_name: str) -> str:
+    if "@" not in sig_name:
+        return sig_name
+    base, dev = sig_name.split("@", 1)
+    safe_dev = "".join(ch if ch.isalnum() else "_" for ch in dev)
+    return f"{base}__{safe_dev}"
+
+
 def get_terminal_name_with_dev_prefix(task: nidaqmx.Task, terminal_name: str) -> str:
     for device in task.devices:
         if device.product_category not in [ProductCategory.C_SERIES_MODULE, ProductCategory.SCXI_MODULE]:
@@ -194,6 +206,10 @@ def math_processing_worker(stop_event, rate, average_samples, available_signals,
             processed_row = (row * scale) - offset
             processed_chunk[i, :] = processed_row
             eval_dict[sig] = processed_row
+            base_name = _base_signal_name(sig)
+            if base_name not in eval_dict:
+                eval_dict[base_name] = processed_row
+            eval_dict[_qualified_eval_alias(sig)] = processed_row
 
         # VIRTUAL MATH
         eval_dict['np'] = np

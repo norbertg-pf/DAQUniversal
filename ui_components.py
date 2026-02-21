@@ -42,7 +42,7 @@ class GDriveHelpDialog(QDialog):
         self.setMinimumHeight(450)
         layout = QVBoxLayout(self)
         
-        text = """
+        text = f"""
         <h3 style="color: #0055a4;">How to use the Google Drive Auto-Uploader</h3>
         <b>1. The 'auth' Folder (Security)</b><br>
         The software will automatically create an <b>auth</b> folder in your project directory. 
@@ -83,18 +83,24 @@ class GDriveHelpDialog(QDialog):
         layout.addWidget(close_btn)
 
 class MathHelpDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, available_vars=None):
         super().__init__(parent)
         self.setWindowTitle("Virtual Math Channels - Help")
         self.setMinimumWidth(500)
         layout = QVBoxLayout(self)
+
+        vars_list = sorted(set(available_vars or []))
+        vars_text = ", ".join(vars_list[:20]) if vars_list else "AI0, AI1, DMM"
         
-        text = """
+        text = f"""
         <h3 style="color: #0055a4;">Using Virtual Math Channels</h3>
         Math channels let you compute values in real-time using your active Analog Inputs.
         <br><br>
         <b>How to write expressions:</b><br>
-        Use the EXACT raw channel names (e.g., <b>AI0</b>, <b>AI5</b>, <b>DMM</b>) in your formula. Do NOT use your custom names.
+        Use the EXACT base channel names (e.g., <b>AI0</b>, <b>AI5</b>, <b>DMM</b>) in your formula. Do NOT use your custom names.
+        <br><br>
+        <b>Currently available variables:</b><br>
+        <code>{vars_text}</code>
         <br><br>
         <b>Examples:</b><br>
         • Voltage Difference: <code>AI0 - AI1</code><br>
