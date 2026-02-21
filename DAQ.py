@@ -8,8 +8,7 @@ import socket
 import numpy as np
 import nidaqmx
 import nidaqmx.system
-from nidaqmx import stream_readers
-from nidaqmx.constants import AcquisitionType, TerminalConfiguration, LineGrouping, ProductCategory, ThermocoupleType, CJCSource
+from nidaqmx.constants import AcquisitionType, TerminalConfiguration, LineGrouping, ThermocoupleType, CJCSource
 
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QLineEdit, QGridLayout,
@@ -30,7 +29,14 @@ import time
 from pathlib import Path
 import traceback
 import re
-import scipy.signal as signal  
+
+from hardware_profiles import (
+    all_ai_channels,
+    all_ao_channels,
+    detect_profile_name,
+    get_profile,
+    DEFAULT_PROFILE_NAME,
+)
 
 # =============================================================================
 # GOOGLE DRIVE API IMPORTS (BOTH METHODS)
@@ -47,248 +53,18 @@ except ImportError:
     GOOGLE_API_AVAILABLE = False
 
 # Global Constants
-ALL_AI_CHANNELS = [f"AI{i}" for i in range(32)]
-ALL_AO_CHANNELS = [f"AO{i}" for i in range(4)]
+DEFAULT_HARDWARE_PROFILE = get_profile(DEFAULT_PROFILE_NAME)
+
+ALL_AI_CHANNELS = all_ai_channels()
+ALL_AO_CHANNELS = all_ao_channels()
 ALL_MATH_CHANNELS = [f"MATH{i}" for i in range(4)]
 ALL_CHANNELS = ALL_AI_CHANNELS + ALL_AO_CHANNELS + ALL_MATH_CHANNELS + ["DMM"]
 
 PLOT_COLORS = [(31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40), (148, 103, 189), (140, 86, 75)]
 
-def get_terminal_name_with_dev_prefix(task: nidaqmx.Task, terminal_name: str) -> str:
-    for device in task.devices:
-        if device.product_category not in [ProductCategory.C_SERIES_MODULE, ProductCategory.SCXI_MODULE]:
-            return f"/{device.name}/{terminal_name}"
-    raise RuntimeError("Suitable device not found in task.")
+from processing_workers import get_terminal_name_with_dev_prefix, daq_read_worker, math_processing_worker
 
-# =============================================================================
-# MULTIPROCESSING WORKERS (Runs on separate CPU Cores)
-# =============================================================================
 
-def daq_read_worker(stop_event, simulate, read_rate, samples_per_read, active_ai_configs, 
-                    n_ai, n_ao, has_dmm, available_signals, ao_state_dict, dmm_buffer_list, 
-                    tdms_q, process_q):
-    """ Runs on Core 2: Handles hardware communication and pulls raw arrays. """
-    sample_nr = 0
-    safe_timeout = (samples_per_read / read_rate) + 2.0
-    task = None
-    stream_reader = None
-
-    try:
-        if simulate:
-            t_wave = 0
-            while not stop_event.is_set():
-                t_start = time.time()
-                time_arr = np.linspace(t_wave, t_wave + samples_per_read/read_rate, samples_per_read, endpoint=False)
-                t_wave += samples_per_read/read_rate
-                
-                if n_ai > 0:
-                    ai_data = np.random.uniform(-0.1, 0.1, (n_ai, samples_per_read))
-                    ai_data[0, :] += np.sin(2 * np.pi * 50 * time_arr) * 2.0  
-                    for i, cfg in enumerate(active_ai_configs):
-                        if cfg.get('SensorType') == "Type K":
-                            ai_data[i, :] = np.random.uniform(24.5, 25.5, samples_per_read)
-                    raw_ai_tdms = ai_data.copy()
-                else:
-                    ai_data = raw_ai_tdms = np.empty((0, samples_per_read))
-
-                if n_ao > 0:
-                    ao_vals = np.array([ao_state_dict.get(f"AO{i}", 0.0) for i in range(4) if f"AO{i}" in available_signals])
-                    ao_chunk = np.repeat(ao_vals[:, None], samples_per_read, axis=1)
-                else: ao_chunk = np.empty((0, samples_per_read))
-
-                # Handle DMM from shared list
-                if has_dmm: 
-                    dmm_data = np.asarray(list(dmm_buffer_list))
-                    del dmm_buffer_list[:] # clear buffer
-                    if len(dmm_data) == 0: dmm_chunk = np.zeros(samples_per_read)
-                    elif len(dmm_data) < samples_per_read:
-                        dmm_chunk = np.concatenate([np.repeat(dmm_data, samples_per_read // len(dmm_data)), np.repeat(dmm_data[-1], samples_per_read - len(dmm_data)* (samples_per_read // len(dmm_data)))])
-                    else:
-                        idx = np.linspace(0, len(dmm_data), samples_per_read+1, endpoint=True).astype(int)
-                        dmm_chunk = np.array([dmm_data[idx[i]:idx[i+1]].mean() if len(dmm_data[idx[i]:idx[i+1]]) > 0 else dmm_chunk[-1] for i in range(samples_per_read)])
-                    dmm_chunk = dmm_chunk.reshape(1, -1)
-                else: dmm_chunk = np.empty((0, samples_per_read))
-                
-                global_time = (sample_nr + np.arange(samples_per_read)) / read_rate
-                
-                try: tdms_q.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
-                except queue.Full: pass 
-                
-                data_to_process = np.vstack((raw_ai_tdms, ao_chunk, dmm_chunk)) if len(available_signals) > 0 else np.empty((0, samples_per_read))
-                try: process_q.put_nowait((global_time, data_to_process))
-                except queue.Full: pass 
-                
-                sample_nr += samples_per_read
-                elapsed = time.time() - t_start
-                if (samples_per_read / read_rate) - elapsed > 0: time.sleep((samples_per_read / read_rate) - elapsed)
-            return
-
-        # Real Hardware Setup
-        ai_data = np.zeros((n_ai, samples_per_read), dtype=np.float64) if n_ai > 0 else np.empty((0, samples_per_read))
-        if n_ai > 0:
-            task = nidaqmx.Task()
-            for ch in active_ai_configs:
-                if ch.get('SensorType') == "Type K": 
-                    task.ai_channels.add_ai_thrmcpl_chan(ch['Terminal'], thermocouple_type=ThermocoupleType.K, cjc_source=CJCSource.BUILT_IN)
-                else: 
-                    task.ai_channels.add_ai_voltage_chan(ch['Terminal'], terminal_config=ch['Config'], min_val=ch['Range'][0], max_val=ch['Range'][1])
-            task.timing.cfg_samp_clk_timing(rate=read_rate, sample_mode=AcquisitionType.CONTINUOUS, samps_per_chan=int(read_rate * 10))
-            stream_reader = stream_readers.AnalogMultiChannelReader(task.in_stream)
-            task.start()
-
-        while not stop_event.is_set():
-            try:
-                if task is not None:
-                    stream_reader.read_many_sample(data=ai_data, number_of_samples_per_channel=samples_per_read, timeout=safe_timeout)
-                    raw_ai_tdms = ai_data.copy()
-                else:
-                    time.sleep(samples_per_read / read_rate)
-                    raw_ai_tdms = ai_data
-            except Exception: continue
-
-            if n_ao > 0:
-                ao_vals = np.array([ao_state_dict.get(f"AO{i}", 0.0) for i in range(4) if f"AO{i}" in available_signals])
-                ao_chunk = np.repeat(ao_vals[:, None], samples_per_read, axis=1)
-            else: ao_chunk = np.empty((0, samples_per_read))
-
-            if has_dmm: 
-                dmm_data = np.asarray(list(dmm_buffer_list))
-                del dmm_buffer_list[:] 
-                if len(dmm_data) == 0: dmm_chunk = np.zeros(samples_per_read)
-                elif len(dmm_data) < samples_per_read:
-                    dmm_chunk = np.concatenate([np.repeat(dmm_data, samples_per_read // len(dmm_data)), np.repeat(dmm_data[-1], samples_per_read - len(dmm_data)* (samples_per_read // len(dmm_data)))])
-                else:
-                    idx = np.linspace(0, len(dmm_data), samples_per_read+1, endpoint=True).astype(int)
-                    dmm_chunk = np.array([dmm_data[idx[i]:idx[i+1]].mean() if len(dmm_data[idx[i]:idx[i+1]]) > 0 else dmm_chunk[-1] for i in range(samples_per_read)])
-                dmm_chunk = dmm_chunk.reshape(1, -1)
-            else: dmm_chunk = np.empty((0, samples_per_read))
-
-            global_time = (sample_nr + np.arange(samples_per_read)) / read_rate
-            
-            try: tdms_q.put_nowait((global_time, raw_ai_tdms, ao_chunk.copy(), dmm_chunk.copy()))
-            except queue.Full: pass
-            
-            data_to_process = np.vstack((raw_ai_tdms, ao_chunk, dmm_chunk))
-            try: process_q.put_nowait((global_time, data_to_process))
-            except queue.Full: pass
-
-            sample_nr += samples_per_read
-
-    except Exception as e: print(f"[ERROR] read_voltages process crashed: {e}")
-    finally:
-        if task is not None:
-            try: task.stop(); task.close()
-            except: pass
-
-def math_processing_worker(stop_event, rate, average_samples, available_signals, 
-                           hw_signals, math_signals, cfg_dict, process_q, gui_q):
-    """ Runs on Core 3: Handles high-speed math, Butterworth filtering, and averaging """
-    num_hw = len(hw_signals)
-    num_total = len(available_signals)
-    if num_total == 0: return
-
-    filter_sos = {}
-    filter_states = {}
-    for sig in available_signals:
-        if sig in cfg_dict and cfg_dict[sig].get("LPF_On", False):
-            cutoff = cfg_dict[sig].get("LPF_Cutoff", 10.0)
-            order = cfg_dict[sig].get("LPF_Order", 4)
-            if cutoff < (rate / 2.0):
-                filter_sos[sig] = signal.butter(order, cutoff, btype='low', fs=rate, output='sos')
-                filter_states[sig] = None
-
-    math_samps = int(rate * 0.5)
-    math_buffer = np.zeros((num_total, math_samps), dtype=np.float64)
-
-    accum_data = []
-    accum_t = []
-    accum_len = 0
-
-    while not stop_event.is_set():
-        try: t_chunk, data_chunk = process_q.get(timeout=0.1)
-        except queue.Empty: continue
-
-        n_new = data_chunk.shape[1]
-        processed_chunk = np.zeros((num_total, n_new), dtype=np.float64)
-        eval_dict = {}
-
-        # FILTERING & SCALING
-        for i, sig in enumerate(hw_signals):
-            row = data_chunk[i, :]
-            if sig in filter_sos:
-                if filter_states[sig] is None:
-                    filter_states[sig] = signal.sosfilt_zi(filter_sos[sig]) * row[0]
-                row, filter_states[sig] = signal.sosfilt(filter_sos[sig], row, zi=filter_states[sig])
-            
-            scale = cfg_dict[sig].get("Scale", 1.0) if sig in cfg_dict else 1.0
-            offset = cfg_dict[sig].get("Offset", 0.0) if sig in cfg_dict else 0.0
-            processed_row = (row * scale) - offset
-            processed_chunk[i, :] = processed_row
-            eval_dict[sig] = processed_row
-
-        # VIRTUAL MATH
-        eval_dict['np'] = np
-        for i, sig in enumerate(math_signals):
-            expr = cfg_dict[sig].get("Expression", "0")
-            try:
-                result = eval(expr, {"__builtins__": None}, eval_dict)
-                if isinstance(result, (int, float)): result = np.full(n_new, result)
-                processed_chunk[num_hw + i, :] = result
-            except Exception:
-                processed_chunk[num_hw + i, :] = np.zeros(n_new)
-            eval_dict[sig] = processed_chunk[num_hw + i, :]
-
-        if n_new >= math_samps: math_buffer = processed_chunk[:, -math_samps:]
-        else:
-            math_buffer = np.roll(math_buffer, -n_new, axis=1)
-            math_buffer[:, -n_new:] = processed_chunk
-
-        # INDICATOR MATH (100ms)
-        samples_100ms = int(rate * 0.1)
-        latest_math_values = {}
-        
-        for i, sig in enumerate(available_signals):
-            sig_data = math_buffer[i, :]
-            if len(sig_data) == 0: continue
-            
-            cur_avg = np.mean(sig_data[-samples_100ms:]) if len(sig_data) > samples_100ms else np.mean(sig_data)
-            rms = np.sqrt(np.mean(np.square(sig_data)))
-            p2p = np.max(sig_data) - np.min(sig_data)
-            centered = sig_data - np.mean(sig_data)
-            crossings = np.where((centered[:-1] < 0) & (centered[1:] >= 0))[0]
-            freq = (len(crossings) - 1) / (len(crossings)/rate) if len(crossings) > 1 else 0.0
-                
-            latest_math_values[sig] = {"Current (100ms avg)": cur_avg, "RMS": rms, "Peak-to-Peak": p2p, "Frequency": freq}
-
-        accum_data.append(processed_chunk)
-        accum_t.append(t_chunk)
-        accum_len += n_new
-
-        # DECIMATE/AVERAGE FOR GUI
-        if accum_len >= average_samples:
-            big_data = np.concatenate(accum_data, axis=1)
-            big_t = np.concatenate(accum_t)
-            
-            n_points = accum_len // average_samples
-            valid_len = n_points * average_samples
-            
-            avg_data = np.mean(big_data[:, :valid_len].reshape((num_total, n_points, average_samples)), axis=2)
-            avg_t = np.mean(big_t[:valid_len].reshape((n_points, average_samples)), axis=1)
-
-            # Dictionary structure to send back to Main Process
-            chunk_dict = {sig: avg_data[i, :] for i, sig in enumerate(available_signals)}
-            try: gui_q.put_nowait((avg_t, chunk_dict, latest_math_values))
-            except queue.Full: pass
-
-            rem_data = big_data[:, valid_len:]
-            rem_t = big_t[valid_len:]
-            accum_data = [rem_data] if rem_data.shape[1] > 0 else []
-            accum_t = [rem_t] if rem_t.shape[0] > 0 else []
-            accum_len = rem_data.shape[1]
-
-# =============================================================================
-# UI WIDGET: HELP DIALOGS & CLASSES
-# =============================================================================
 class GDriveHelpDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1103,7 +879,9 @@ class DAQControlApp(QWidget):
         self.current_tdms_filepath = ""
         self.export_settings = {}
         
-        self.available_signals = ["AI0", "AI1", "AI2", "AI3", "AI4", "AI5", "AO0", "AO1", "AO2", "AO3", "DMM"]
+        self.current_hardware_profile = DEFAULT_HARDWARE_PROFILE
+        self.device_product_types = {}
+        self.available_signals = self.current_hardware_profile.default_enabled_signals.copy()
         self.master_channel_configs = {sig: self.get_default_channel_config(sig) for sig in ALL_CHANNELS}
         self.active_channel_configs = [] 
         
@@ -1335,29 +1113,58 @@ class DAQControlApp(QWidget):
     def refresh_devices(self):
         current_data = self.device_cb.currentData()
         self.device_cb.clear()
+        self.device_product_types = {}
         devs = []
         try:
             sys_local = nidaqmx.system.System.local()
-            for d in sys_local.devices: devs.append((d.name, d.product_type))
-            if not devs: devs = [("Dev1", "Simulated Device")]
+            for d in sys_local.devices:
+                devs.append((d.name, d.product_type))
+            if not devs:
+                devs = [("Dev1", "Simulated Device")]
         except Exception:
             devs = [("Dev1", "Simulated Device")]
-            
+
         idx_to_set = 0
         for i, (name, ptype) in enumerate(devs):
+            self.device_product_types[name] = ptype
             self.device_cb.addItem(f"{name} ({ptype})", userData=name)
-            if name == current_data: idx_to_set = i
-        
-        if self.device_cb.count() > 0: self.device_cb.setCurrentIndex(idx_to_set)
+            if name == current_data:
+                idx_to_set = i
 
-    def update_device_labels(self, _):
+        if self.device_cb.count() > 0:
+            self.device_cb.setCurrentIndex(idx_to_set)
+            self.on_device_changed(self.device_cb.currentIndex())
+
+    def get_selected_device_profile(self):
+        dev_name = self.device_cb.currentData() or ""
+        product_type = self.device_product_types.get(dev_name, "")
+        profile_name = detect_profile_name(product_type, dev_name)
+        return get_profile(profile_name)
+
+    def apply_selected_device_profile(self):
+        self.current_hardware_profile = self.get_selected_device_profile()
+        valid_hw = set(self.current_hardware_profile.ai_channels + self.current_hardware_profile.ao_channels + ["DMM"])
+
+        # Keep virtual channels, clamp hardware channels to current device profile.
+        kept_math = [s for s in self.available_signals if s.startswith("MATH")]
+        kept_hw = [s for s in self.available_signals if s in valid_hw]
+        if not kept_hw:
+            kept_hw = self.current_hardware_profile.default_enabled_signals.copy()
+
+        self.available_signals = kept_hw + kept_math
+
+    def on_device_changed(self, _):
+        if not hasattr(self, "config_grid"):
+            return
+        self.apply_selected_device_profile()
         new_device = self.device_cb.currentData()
-        if not new_device: return
-        for ch in self.channel_ui_configs:
+        if not new_device:
+            return
+        for ch in getattr(self, "channel_ui_configs", []):
             raw_name = ch['name']
             if not raw_name.startswith("MATH"):
                 ch['ch_label'].setText(f"{new_device}/{raw_name.lower()} ({raw_name})")
-
+        self.rebuild_config_tab()
     def open_channel_selector(self):
         self.cache_current_ui_configs()
         dialog = ChannelSelectionDialog(self.available_signals, self)
@@ -1434,8 +1241,7 @@ class DAQControlApp(QWidget):
         dev_layout = QHBoxLayout()
         dev_layout.addWidget(QLabel("<b>DAQ Device:</b>"))
         self.device_cb = QComboBox()
-        self.refresh_devices()
-        self.device_cb.currentIndexChanged.connect(self.update_device_labels)
+        self.device_cb.currentIndexChanged.connect(self.on_device_changed)
         dev_layout.addWidget(self.device_cb)
         self.refresh_dev_btn = QPushButton("Refresh Devices")
         self.refresh_dev_btn.clicked.connect(self.refresh_devices)
@@ -1508,6 +1314,9 @@ class DAQControlApp(QWidget):
         bottom_hlay.addStretch()
         bottom_hlay.addWidget(self.apply_config_btn)
         main_lay.addLayout(bottom_hlay)
+
+        # Populate devices only after config widgets/layouts exist
+        self.refresh_devices()
         self.rebuild_config_tab()
 
     def show_gdrive_help(self):
@@ -1792,6 +1601,7 @@ class DAQControlApp(QWidget):
                 self.folder_display.setText(f"Output Folder: {self.output_folder[-40:]}")
 
             if "available_signals" in main_cfg: self.available_signals = main_cfg["available_signals"]
+            self.apply_selected_device_profile()
             if "master_channels" in config:
                 for k, v in config["master_channels"].items():
                     if k in self.master_channel_configs: self.master_channel_configs[k].update(v)
