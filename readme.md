@@ -15,3 +15,29 @@ The DAQ channel layout is profile-driven and selected automatically from the cho
 - The active AI/AO channel set is updated automatically for that selected device.
 
 If you add support for a new NI card, add its profile and aliases in `hardware_profiles.py`.
+
+## Build standalone Windows `.exe` (PyInstaller)
+
+A one-file PyInstaller spec is included as `DAQ_ui.spec`.
+
+1. Install runtime + build dependencies:
+
+```bash
+pip install pyinstaller pyqtgraph
+```
+
+2. Build a single executable and place it in `library/binaries`:
+
+```bash
+mkdir -p library/binaries
+pyinstaller --noconfirm --clean --distpath library/binaries --workpath build DAQ_ui.spec
+```
+
+Result:
+
+- `library/binaries/DAQUniversalReader.exe` (standalone one-file app)
+
+Notes:
+
+- Build on Windows to produce a Windows `.exe`.
+- NI-DAQ/driver communication still requires compatible NI drivers/hardware on the target machine.
