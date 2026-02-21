@@ -520,9 +520,15 @@ class DAQControlApp(QWidget):
             allowed_signals.append("DMM")
             active_signals = [s for s in self.available_signals if s in allowed_signals]
 
-        dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals)
+        dmm_settings = {"ip": self.Keithley_DMM_IP.text(), "rate_hz": self.Keithley_DMM_rate.text(), "timeout_s": self.Keithley_DMM_timeout.text()}
+        dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals, dmm_settings=dmm_settings)
         if dialog.exec_():
             selected = dialog.get_selected()
+            dmm_cfg = dialog.get_dmm_settings()
+            if dmm_cfg:
+                self.Keithley_DMM_IP.setText(dmm_cfg.get("ip", self.Keithley_DMM_IP.text()))
+                self.Keithley_DMM_rate.setText(dmm_cfg.get("rate_hz", self.Keithley_DMM_rate.text()))
+                self.Keithley_DMM_timeout.setText(dmm_cfg.get("timeout_s", self.Keithley_DMM_timeout.text()))
             if len(selected) == 0:
                 self.available_signals = []
             elif self._is_math_device_selected():
@@ -650,22 +656,35 @@ class DAQControlApp(QWidget):
         bottom_grid = QGridLayout()
         bottom_grid.addWidget(QLabel("<b>Keithley DMM IP:</b>"), 0, 0)
         self.Keithley_DMM_IP = QLineEdit("169.254.169.37")
-        bottom_grid.addWidget(self.Keithley_DMM_IP, 0, 1, 1, 4) 
+        bottom_grid.addWidget(self.Keithley_DMM_IP, 0, 1)
+
+        bottom_grid.addWidget(QLabel("<b>DMM Rate [Hz]:</b>"), 0, 2)
+        self.Keithley_DMM_rate = QLineEdit("100")
+        bottom_grid.addWidget(self.Keithley_DMM_rate, 0, 3)
+
+        bottom_grid.addWidget(QLabel("<b>DMM Timeout [s]:</b>"), 0, 4)
+        self.Keithley_DMM_timeout = QLineEdit("1.0")
+        bottom_grid.addWidget(self.Keithley_DMM_timeout, 0, 5)
+
+        bottom_grid.addWidget(QLabel("<b>DMM Backend:</b>"), 1, 0)
+        self.Keithley_backend_cb = QComboBox()
+        self.Keithley_backend_cb.addItems(["pyvisa", "keithley_daq6510 (auto)"])
+        bottom_grid.addWidget(self.Keithley_backend_cb, 1, 1)
         
-        bottom_grid.addWidget(QLabel("<b>Google Drive Target Folder Link:</b>"), 1, 0)
+        bottom_grid.addWidget(QLabel("<b>Google Drive Target Folder Link:</b>"), 2, 0)
         self.gdrive_link_input = QLineEdit("")
         self.gdrive_link_input.setPlaceholderText("https://drive.google.com/drive/folders/...")
-        bottom_grid.addWidget(self.gdrive_link_input, 1, 1)
+        bottom_grid.addWidget(self.gdrive_link_input, 2, 1, 1, 2)
         
-        bottom_grid.addWidget(QLabel("<b>Auth Method:</b>"), 1, 2)
+        bottom_grid.addWidget(QLabel("<b>Auth Method:</b>"), 2, 3)
         self.gdrive_auth_cb = QComboBox()
         self.gdrive_auth_cb.addItems(["OAuth 2.0 (User Login)", "Service Account (Robot)"])
-        bottom_grid.addWidget(self.gdrive_auth_cb, 1, 3)
+        bottom_grid.addWidget(self.gdrive_auth_cb, 2, 4)
         
         self.gdrive_help_btn = QPushButton("Help")
         self.gdrive_help_btn.setStyleSheet("font-weight: bold; background-color: #6c757d; color: white;")
         self.gdrive_help_btn.clicked.connect(self.show_gdrive_help)
-        bottom_grid.addWidget(self.gdrive_help_btn, 1, 4)
+        bottom_grid.addWidget(self.gdrive_help_btn, 2, 5)
 
         main_lay.addLayout(bottom_grid)
         
@@ -987,6 +1006,9 @@ class DAQControlApp(QWidget):
                 "window_height": self.height(),
                 "threshold": self.threshold_input.text(),
                 "dmm_ip": self.Keithley_DMM_IP.text(),
+                "dmm_rate_hz": self.Keithley_DMM_rate.text(),
+                "dmm_timeout_s": self.Keithley_DMM_timeout.text(),
+                "dmm_backend": self.Keithley_backend_cb.currentText(),
                 "gdrive_link": self.gdrive_link_input.text(),
                 "gdrive_auth": self.gdrive_auth_cb.currentText(),
                 "simulate": self.simulate_mode,
@@ -1022,6 +1044,11 @@ class DAQControlApp(QWidget):
                 except (TypeError, ValueError): pass
             if "threshold" in main_cfg: self.threshold_input.setText(main_cfg["threshold"])
             if "dmm_ip" in main_cfg: self.Keithley_DMM_IP.setText(main_cfg["dmm_ip"])
+            if "dmm_rate_hz" in main_cfg: self.Keithley_DMM_rate.setText(main_cfg["dmm_rate_hz"])
+            if "dmm_timeout_s" in main_cfg: self.Keithley_DMM_timeout.setText(main_cfg["dmm_timeout_s"])
+            if "dmm_backend" in main_cfg:
+                idx = self.Keithley_backend_cb.findText(main_cfg["dmm_backend"])
+                if idx >= 0: self.Keithley_backend_cb.setCurrentIndex(idx)
             if "gdrive_link" in main_cfg: self.gdrive_link_input.setText(main_cfg["gdrive_link"])
             
             if "gdrive_auth" in main_cfg: 
@@ -1158,7 +1185,9 @@ class DAQControlApp(QWidget):
         try: average_samples = max(1, int(self.average_samples_input.text()))
         except ValueError: average_samples = 100
         samples_per_read = max(1, int(read_rate // 10)) 
-        
+        try: dmm_rate_hz = max(1.0, float(self.Keithley_DMM_rate.text()))
+        except ValueError: dmm_rate_hz = 100.0
+
         simulate = self.simulate_mode
         has_dmm = "DMM" in self.available_signals
         n_ai = len(active_ai_configs)
@@ -1168,7 +1197,7 @@ class DAQControlApp(QWidget):
         self.daq_process = mp.Process(target=daq_read_worker, args=(
             self.mp_stop_flag, simulate, read_rate, samples_per_read, active_ai_configs, 
             n_ai, n_ao, active_ao_signals, has_dmm, self.available_signals, self.ao_state_dict, self.dmm_buffer_list, 
-            self.tdms_queue, self.process_queue, 100.0))
+            self.tdms_queue, self.process_queue, dmm_rate_hz))
             
         self.math_process = mp.Process(target=math_processing_worker, args=(
             self.mp_stop_flag, read_rate, average_samples, self.available_signals, 
@@ -1236,24 +1265,32 @@ class DAQControlApp(QWidget):
     def DMM_read(self):
         if "DMM" not in self.available_signals:
             return
+        try: dmm_rate_hz = max(1.0, float(self.Keithley_DMM_rate.text()))
+        except ValueError: dmm_rate_hz = 100.0
+        try: dmm_timeout_s = max(0.05, float(self.Keithley_DMM_timeout.text()))
+        except ValueError: dmm_timeout_s = 1.0
+        dt_s = 1.0 / dmm_rate_hz
+        backend = self.Keithley_backend_cb.currentText().lower()
+
         if self.simulate_mode:
             while not self.mp_stop_flag.is_set():
                 self.dmm_buffer_list.append(float(np.random.uniform(-0.1, 0.1)))
-                time.sleep(0.01)
+                time.sleep(dt_s)
             return
 
         inst = None
         try:
-            inst = DMM6510readout.write_script_to_Keithley(self.Keithley_DMM_IP.text(), "0.01")
+            use_pkg = "keithley_daq6510" in backend
+            inst = DMM6510readout.write_script_to_Keithley(self.Keithley_DMM_IP.text(), f"{dt_s:.6g}", timeout_s=dmm_timeout_s, prefer_keithley_pkg=use_pkg)
             while not self.mp_stop_flag.is_set():
                 try:
                     self.dmm_buffer_list.append(float(DMM6510readout.read_data(inst)))
                 except (TypeError, ValueError) as exc:
                     self._log_exception("Invalid DMM data received", exc, key="dmm_read_data", interval_sec=10.0)
-                    time.sleep(0.01)
+                    time.sleep(dt_s)
                 except (OSError, RuntimeError) as exc:
                     self._log_exception("DMM read transport error", exc, key="dmm_transport", interval_sec=10.0)
-                    time.sleep(0.1)
+                    time.sleep(min(0.2, max(dt_s, 0.02)))
         except (OSError, RuntimeError, ValueError) as exc:
             self._log_exception("Failed to initialize DMM readout", exc, key="dmm_init", interval_sec=10.0)
             self._set_shutdown_status("Status: DMM read failure", color="red")

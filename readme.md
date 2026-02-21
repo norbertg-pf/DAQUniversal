@@ -4,7 +4,7 @@
 python -m venv .venv
 .venv\Scripts\activate
 python.exe -m pip install --upgrade pip
-pip install PyQt5 nidaqmx numpy matplotlib nptdms pyvisa google-api-python-client google-auth-httplib2 google-auth-oauthlib scipy
+pip install PyQt5 nidaqmx numpy matplotlib nptdms pyvisa keithley_daq6510 google-api-python-client google-auth-httplib2 google-auth-oauthlib scipy
 ```
 
 ## Hardware profile detection
@@ -27,12 +27,13 @@ Current behavior:
 - `DMM` can be selected together with NI AI/AO channels for simultaneous acquisition.
 - Since Keithley data is ~100 Hz, samples are duplicated (zero-order hold) to match the higher NI sample stream when building each DAQ chunk.
 - In the channel selector, you can enable `DMM` as one channel alongside NI signals.
+- The channel selector popup also includes DMM settings (IP, rate, timeout) for quick Keithley tuning.
 - In **Channel Config**, the `DMM` channel supports AI-like processing fields: custom name, scale, unit, offset, and LPF settings.
 
 How to use:
 
 1. Connect the instrument over LAN/USB/GPIB and ensure VISA can see it.
-2. In the app, configure the DMM connection settings in the **External Devices** section.
+2. In the app, configure the DMM connection settings in the **External Devices** section (IP, sample rate, timeout, backend).
 3. Open channel selection and enable the `DMM` signal.
 
 The Keithley entry is virtual (not NI-DAQmx-enumerated hardware), so NI physical devices and the Keithley mode are intentionally handled through different acquisition paths.

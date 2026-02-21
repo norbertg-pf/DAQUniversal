@@ -128,12 +128,13 @@ class MathHelpDialog(QDialog):
 # =============================================================================
 
 class ChannelSelectionDialog(QDialog):
-    def __init__(self, active_signals, parent=None, allowed_signals=None):
+    def __init__(self, active_signals, parent=None, allowed_signals=None, dmm_settings=None):
         super().__init__(parent)
         self.setWindowTitle("Select Active Channels")
         self.setMinimumWidth(800)
         layout = QVBoxLayout(self)
         self.checkboxes = {}
+        self.dmm_settings = dmm_settings or {}
         allowed = list(allowed_signals) if allowed_signals is not None else list(ALL_CHANNELS)
 
         def split_sig(sig):
@@ -203,11 +204,24 @@ class ChannelSelectionDialog(QDialog):
 
         if "DMM" in allowed:
             dmm_group = QGroupBox("External Devices")
-            dmm_layout = QVBoxLayout()
+            dmm_layout = QGridLayout()
             cb = QCheckBox("DMM")
             cb.setChecked("DMM" in active_signals)
             self.checkboxes["DMM"] = cb
-            dmm_layout.addWidget(cb)
+            dmm_layout.addWidget(cb, 0, 0, 1, 2)
+
+            dmm_layout.addWidget(QLabel("Keithley IP:"), 1, 0)
+            self.dmm_ip_input = QLineEdit(self.dmm_settings.get("ip", ""))
+            dmm_layout.addWidget(self.dmm_ip_input, 1, 1)
+
+            dmm_layout.addWidget(QLabel("Rate [Hz]:"), 2, 0)
+            self.dmm_rate_input = QLineEdit(self.dmm_settings.get("rate_hz", "100"))
+            dmm_layout.addWidget(self.dmm_rate_input, 2, 1)
+
+            dmm_layout.addWidget(QLabel("Timeout [s]:"), 3, 0)
+            self.dmm_timeout_input = QLineEdit(self.dmm_settings.get("timeout_s", "1.0"))
+            dmm_layout.addWidget(self.dmm_timeout_input, 3, 1)
+
             dmm_group.setLayout(dmm_layout)
             layout.addWidget(dmm_group)
 
@@ -221,6 +235,15 @@ class ChannelSelectionDialog(QDialog):
 
     def get_selected(self):
         return [sig for sig, cb in self.checkboxes.items() if cb.isChecked()]
+
+    def get_dmm_settings(self):
+        if not hasattr(self, "dmm_ip_input"):
+            return {}
+        return {
+            "ip": self.dmm_ip_input.text().strip(),
+            "rate_hz": self.dmm_rate_input.text().strip(),
+            "timeout_s": self.dmm_timeout_input.text().strip(),
+        }
 
 class ExportDialog(QDialog):
     def __init__(self, parent=None):
@@ -515,6 +538,7 @@ class SubplotSettingsDialog(QDialog):
         self.setWindowTitle("Select Channels for Subplot")
         layout = QVBoxLayout(self)
         self.checkboxes = {}
+        self.dmm_settings = dmm_settings or {}
         grid = QGridLayout()
         row, col = 0, 0
         for raw_sig, display_text in mapping:
