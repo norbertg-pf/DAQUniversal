@@ -268,6 +268,8 @@ class DAQControlApp(QWidget):
         
         status_row = QHBoxLayout()
         status_row.addWidget(self.upload_status_label)
+        status_row.addSpacing(12)
+        status_row.addWidget(self.simulation_note_label)
         status_row.addStretch()
         controls_layout.addLayout(status_row, 7, 0, 1, 2)
         
@@ -276,7 +278,6 @@ class DAQControlApp(QWidget):
         plot_header.addWidget(QLabel("<b>Dynamic Plot Configuration</b>"))
         plot_header.addStretch()
         plot_header.addWidget(self.fps_label)
-        plot_header.addWidget(self.simulation_note_label)
         plot_control_layout.addLayout(plot_header)
         self.plot_scroll_area = QScrollArea()
         self.plot_scroll_widget = QWidget()
