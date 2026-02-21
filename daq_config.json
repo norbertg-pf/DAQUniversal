@@ -51,7 +51,7 @@
             "range": "-0.2 to 0.2",
             "sensor": "Type K",
             "scale": "1",
-            "unit": "K",
+            "unit": "\u00b0C",
             "offset": "-273.16",
             "lpf_on": false,
             "lpf_cutoff": "10.0",
