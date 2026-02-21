@@ -471,10 +471,6 @@ class DAQControlApp(QWidget):
 
         kept_math = [s for s in self.available_signals if s.startswith("MATH")]
         kept_hw = [s for s in self.available_signals if s in valid_hw]
-        if not kept_hw and self.detected_devices:
-            default_dev = self.detected_devices[0]
-            default_profile = get_profile(detect_profile_name(self.device_product_types.get(default_dev, ""), default_dev))
-            kept_hw = [self._mk_dev_signal(default_dev, sig) for sig in default_profile.default_enabled_signals]
 
         self.available_signals = kept_hw + kept_math
         for sig in self.available_signals: self._ensure_signal_state(sig)
@@ -508,7 +504,9 @@ class DAQControlApp(QWidget):
         dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals)
         if dialog.exec_():
             selected = dialog.get_selected()
-            if self._is_math_device_selected():
+            if len(selected) == 0:
+                self.available_signals = []
+            elif self._is_math_device_selected():
                 kept_hw = [s for s in self.available_signals if not s.startswith("MATH")]
                 self.available_signals = kept_hw + selected
             else:
@@ -696,8 +694,7 @@ class DAQControlApp(QWidget):
         
         active_ai = [s for s in self.available_signals if self._is_ai_signal(s)]
         if active_ai:
-            ai_heading = "Math Device Inputs" if self._is_math_device_selected() else "Analog Inputs (AI)"
-            ai_label = QLabel(f"<b>{ai_heading}</b>")
+            ai_label = QLabel("<b>Analog Inputs (AI)</b>")
             ai_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 10px; margin-bottom: 5px;")
             self.config_grid.addWidget(ai_label, row_idx, 0, 1, 12)
             row_idx += 1
@@ -771,8 +768,7 @@ class DAQControlApp(QWidget):
             line.setFrameShadow(QFrame.Sunken)
             self.config_grid.addWidget(line, row_idx, 0, 1, 12)
             row_idx += 1
-            ao_heading = "Math Device Outputs" if self._is_math_device_selected() else "Analog Outputs (AO)"
-            ao_label = QLabel(f"<b>{ao_heading}</b>")
+            ao_label = QLabel("<b>Analog Outputs (AO)</b>")
             ao_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
             self.config_grid.addWidget(ao_label, row_idx, 0, 1, 12)
             row_idx += 1
@@ -805,8 +801,7 @@ class DAQControlApp(QWidget):
             row_idx += 1
             
             m_lay = QHBoxLayout()
-            m_title = "Math Device Channels" if self._is_math_device_selected() else "Virtual Math Channels"
-            m_label = QLabel(f"<b>{m_title}</b>")
+            m_label = QLabel("<b>Virtual Math Channels</b>")
             m_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
             m_help = QPushButton("Math Help")
             m_help.setStyleSheet("font-weight:bold; background-color:#ffc107;")
