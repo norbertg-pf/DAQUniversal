@@ -232,7 +232,18 @@ class DAQControlApp(QWidget):
             if child_layout is not None:
                 self._clear_layout_recursive(child_layout)
             if child_widget is not None:
+                if hasattr(self, "Keithley_DMM_IP") and child_widget is self.Keithley_DMM_IP:
+                    child_widget.setParent(None)
+                    continue
                 child_widget.deleteLater()
+
+    def _safe_qline_text(self, widget, default=""):
+        if widget is None:
+            return default
+        try:
+            return widget.text()
+        except RuntimeError:
+            return default
 
     def _ensure_signal_state(self, signal_name):
         if signal_name not in self.master_channel_configs:
@@ -962,7 +973,7 @@ class DAQControlApp(QWidget):
                 "window_width": self.width(),
                 "window_height": self.height(),
                 "threshold": self.threshold_input.text(),
-                "dmm_ip": self.Keithley_DMM_IP.text(),
+                "dmm_ip": self._safe_qline_text(getattr(self, "Keithley_DMM_IP", None), default=""),
                 "gdrive_link": self.gdrive_link_input.text(),
                 "gdrive_auth": self.gdrive_auth_cb.currentText(),
                 "simulate": self.simulate_mode,
