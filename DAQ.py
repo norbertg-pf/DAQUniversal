@@ -487,7 +487,7 @@ class DAQControlApp(QWidget):
             if not raw_name.startswith("MATH"):
                 base_name = self._signal_base_name(raw_name)
                 dev_name = self._signal_device_name(raw_name) or new_device
-                ch['ch_label'].setText(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({raw_name})")
+                ch['ch_label'].setText(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
         self.rebuild_config_tab()
     def open_channel_selector(self):
         self.cache_current_ui_configs()
