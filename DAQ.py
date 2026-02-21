@@ -764,6 +764,8 @@ class DAQControlApp(QWidget):
                 "read_rate": self.read_rate_input.text(),
                 "avg_samples": self.average_samples_input.text(),
                 "plot_window": self.plot_window_input.text(),
+                "window_width": self.width(),
+                "window_height": self.height(),
                 "threshold": self.threshold_input.text(),
                 "dmm_ip": self.Keithley_DMM_IP.text(),
                 "gdrive_link": self.gdrive_link_input.text(),
@@ -796,6 +798,9 @@ class DAQControlApp(QWidget):
             if "read_rate" in main_cfg: self.read_rate_input.setText(main_cfg["read_rate"])
             if "avg_samples" in main_cfg: self.average_samples_input.setText(main_cfg["avg_samples"])
             if "plot_window" in main_cfg: self.plot_window_input.setText(main_cfg["plot_window"])
+            if "window_width" in main_cfg and "window_height" in main_cfg:
+                try: self.resize(int(main_cfg["window_width"]), int(main_cfg["window_height"]))
+                except (TypeError, ValueError): pass
             if "threshold" in main_cfg: self.threshold_input.setText(main_cfg["threshold"])
             if "dmm_ip" in main_cfg: self.Keithley_DMM_IP.setText(main_cfg["dmm_ip"])
             if "gdrive_link" in main_cfg: self.gdrive_link_input.setText(main_cfg["gdrive_link"])
