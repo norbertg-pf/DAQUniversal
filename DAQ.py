@@ -250,7 +250,7 @@ class DAQControlApp(QWidget):
         self.export_ascii_btn = QPushButton("Export ASCII Data")
         self.export_ascii_btn.setStyleSheet("font-weight: bold; background-color: #0078D7; color: white;")
         self.export_ascii_btn.clicked.connect(self.open_export_dialog)
-        self.open_ao_btn = QPushButton("Open AnalogOut Control Pop-up")
+        self.open_ao_btn = QPushButton("Open AnalogOut Control")
         self.open_ao_btn.setStyleSheet("font-weight: bold; background-color: #ff9900; color: black;")
         self.open_ao_btn.clicked.connect(self.launch_analog_out)
         
@@ -815,7 +815,7 @@ class DAQControlApp(QWidget):
 
             if "output_folder" in main_cfg: 
                 self.output_folder = main_cfg["output_folder"]
-                self.folder_display.setText(f"Output Folder: {self.output_folder[-40:]}")
+                self.folder_display.setText(f"Output Folder: ..{self.output_folder[-30:]}")
 
             if "available_signals" in main_cfg: self.available_signals = main_cfg["available_signals"]
             self.apply_selected_device_profile()
