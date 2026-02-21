@@ -128,12 +128,13 @@ class MathHelpDialog(QDialog):
 # =============================================================================
 
 class ChannelSelectionDialog(QDialog):
-    def __init__(self, active_signals, parent=None, allowed_signals=None):
+    def __init__(self, active_signals, parent=None, allowed_signals=None, dmm_settings=None):
         super().__init__(parent)
         self.setWindowTitle("Select Active Channels")
         self.setMinimumWidth(800)
         layout = QVBoxLayout(self)
         self.checkboxes = {}
+        self.dmm_settings = dmm_settings or {}
         allowed = list(allowed_signals) if allowed_signals is not None else list(ALL_CHANNELS)
 
         def split_sig(sig):
@@ -142,15 +143,22 @@ class ChannelSelectionDialog(QDialog):
                 return base, dev
             return sig, None
 
+        def is_simulated(sig):
+            base, dev = split_sig(sig)
+            dev = (dev or "").lower()
+            return dev.startswith("simulated") or "simulated" in dev
+
         def pretty(sig):
             base, dev = split_sig(sig)
+            if base == "DMM":
+                return "DMM (Keithley)"
             if dev:
                 dev_disp = parent._device_display_name(dev) if parent and hasattr(parent, "_device_display_name") else dev
                 return f"{dev_disp}/{base.lower()} ({base})"
             return sig
 
-        ai_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AI")]
-        ao_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AO")]
+        ai_signals = [sig for sig in allowed if (split_sig(sig)[0].startswith("AI") or split_sig(sig)[0] == "DMM") and not is_simulated(sig)]
+        ao_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AO") and not is_simulated(sig)]
         math_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("MATH")]
 
         if ai_signals:
@@ -202,14 +210,23 @@ class ChannelSelectionDialog(QDialog):
             layout.addWidget(math_group)
 
         if "DMM" in allowed:
-            dmm_group = QGroupBox("External Devices")
-            dmm_layout = QVBoxLayout()
-            cb = QCheckBox("DMM")
-            cb.setChecked("DMM" in active_signals)
-            self.checkboxes["DMM"] = cb
-            dmm_layout.addWidget(cb)
-            dmm_group.setLayout(dmm_layout)
-            layout.addWidget(dmm_group)
+            dmm_cfg_group = QGroupBox("Keithley DMM Settings")
+            dmm_cfg_layout = QGridLayout()
+
+            dmm_cfg_layout.addWidget(QLabel("Keithley IP:"), 0, 0)
+            self.dmm_ip_input = QLineEdit(self.dmm_settings.get("ip", ""))
+            dmm_cfg_layout.addWidget(self.dmm_ip_input, 0, 1)
+
+            dmm_cfg_layout.addWidget(QLabel("Rate [Hz]:"), 1, 0)
+            self.dmm_rate_input = QLineEdit(self.dmm_settings.get("rate_hz", "100"))
+            dmm_cfg_layout.addWidget(self.dmm_rate_input, 1, 1)
+
+            dmm_cfg_layout.addWidget(QLabel("Timeout [s]:"), 2, 0)
+            self.dmm_timeout_input = QLineEdit(self.dmm_settings.get("timeout_s", "1.0"))
+            dmm_cfg_layout.addWidget(self.dmm_timeout_input, 2, 1)
+
+            dmm_cfg_group.setLayout(dmm_cfg_layout)
+            layout.addWidget(dmm_cfg_group)
 
         btns = QHBoxLayout()
         ok_btn = QPushButton("Apply Configuration")
@@ -221,6 +238,15 @@ class ChannelSelectionDialog(QDialog):
 
     def get_selected(self):
         return [sig for sig, cb in self.checkboxes.items() if cb.isChecked()]
+
+    def get_dmm_settings(self):
+        if not hasattr(self, "dmm_ip_input"):
+            return {}
+        return {
+            "ip": self.dmm_ip_input.text().strip(),
+            "rate_hz": self.dmm_rate_input.text().strip(),
+            "timeout_s": self.dmm_timeout_input.text().strip(),
+        }
 
 class ExportDialog(QDialog):
     def __init__(self, parent=None):

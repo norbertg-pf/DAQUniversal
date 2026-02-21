@@ -10,6 +10,7 @@ import threading
 from typing import Iterable, List, Tuple, Union
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import os
+import importlib
 
 # ---------------- Global Variables ---------------- #
 measurement_running = False
@@ -68,21 +69,36 @@ def KeithleyDMM_start():
     write_script_to_Keithley(IP)
 
 # ---------------- Keithley Script ---------------- #
-def write_script_to_Keithley(IP, dt):
+def write_script_to_Keithley(IP, dt, timeout_s=1.0, prefer_keithley_pkg=False):
+    if prefer_keithley_pkg:
+        try:
+            kd = importlib.import_module("keithley_daq6510")
+            inst_cls = getattr(kd, "DAQ6510", None)
+            if inst_cls is not None:
+                inst = inst_cls(IP)
+                if hasattr(inst, "connect"):
+                    inst.connect()
+                return inst
+        except Exception:
+            pass
+
     rm = pyvisa.ResourceManager()
-    
+
     try:
         inst = rm.open_resource(f"TCPIP0::{IP}::inst0::INSTR")
+        try:
+            inst.timeout = int(float(timeout_s) * 1000)
+        except Exception:
+            pass
     except Exception as e:
-        messagebox.showinfo("Error", f"Could not connect to Keithley:\n{e}")
-        pass
+        messagebox.showinfo("Error", f"Could not connect to Keithley\n{e}")
         return e
 
     with open("DMM6510.tsp", "r") as f:
         script_content = f.read()
 
-    script_content = script_content.replace("SAMPLE_RATE", dt )
-    
+    script_content = script_content.replace("SAMPLE_RATE", str(dt))
+
     inst.write("abort")
     inst.write('script.delete("QD")')
     inst.write("loadscript QD")
@@ -160,10 +176,17 @@ def update_graph():
 # ---------------- Data Collection ---------------- #
 def read_data(inst):
     try:
-        data = inst.read().strip()
+        if hasattr(inst, "read"):
+            data = inst.read().strip()
+        elif hasattr(inst, "measure"):
+            data = str(inst.measure())
+        elif hasattr(inst, "read_value"):
+            data = str(inst.read_value())
+        else:
+            data = str(inst)
     except Exception as e:
         print("exception at data collection:", e)
-        pass
+        raise
     return data
 
 def read_save_data(inst):
@@ -227,10 +250,13 @@ def stop_measurement(inst):
     messagebox.showinfo("Stopped", "Measurement finished. File saved.")
 
 def stop_instrument(inst):
-    inst.write("abort")
-    inst.write("ABORt")
-    inst.write("*CLS")
-    inst.write("*RST")
+    if hasattr(inst, "write"):
+        inst.write("abort")
+        inst.write("ABORt")
+        inst.write("*CLS")
+        inst.write("*RST")
+    if hasattr(inst, "disconnect"):
+        inst.disconnect()
 
 def exit_app():
     root.destroy()
