@@ -154,7 +154,7 @@ class ChannelSelectionDialog(QDialog):
         ao_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AO")]
         math_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("MATH")]
 
-        if ai_signals:
+        if ai_signals or "DMM" in allowed or show_dmm_ip:
             ai_group = QGroupBox("Analog Inputs (AI)")
             ai_layout = QGridLayout()
             r, c = 0, 0

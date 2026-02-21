@@ -528,16 +528,14 @@ class DAQControlApp(QWidget):
             allowed_signals = [f"MATH{i}" for i in range(4)]
             active_signals = [s for s in self.available_signals if s.startswith("MATH")]
             show_dmm_ip = False
-        elif self._is_dmm_device_selected():
-            allowed_signals = ["DMM"]
-            active_signals = [s for s in self.available_signals if s == "DMM"]
-            show_dmm_ip = True
         else:
             allowed_signals = []
             for dev in self.detected_devices:
                 allowed_signals.extend(self._channels_for_device(dev))
+            if "DMM" not in allowed_signals:
+                allowed_signals.append("DMM")
             active_signals = [s for s in self.available_signals if s in allowed_signals]
-            show_dmm_ip = False
+            show_dmm_ip = True
 
         dialog = ChannelSelectionDialog(
             active_signals,
@@ -548,20 +546,15 @@ class DAQControlApp(QWidget):
         )
         if dialog.exec_():
             selected = dialog.get_selected()
-            if self._is_dmm_device_selected():
-                new_ip = dialog.get_dmm_ip()
-                if new_ip and hasattr(self, "Keithley_DMM_IP"):
-                    self.Keithley_DMM_IP.setText(new_ip)
+            new_ip = dialog.get_dmm_ip()
+            if new_ip and hasattr(self, "Keithley_DMM_IP"):
+                self.Keithley_DMM_IP.setText(new_ip)
             if len(selected) == 0:
                 self.available_signals = []
             elif self._is_math_device_selected():
                 kept_hw = [s for s in self.available_signals if (not s.startswith("MATH") and s != "DMM")]
                 kept_dmm = [s for s in self.available_signals if s == "DMM"]
                 self.available_signals = kept_hw + kept_dmm + selected
-            elif self._is_dmm_device_selected():
-                kept_hw = [s for s in self.available_signals if (not s.startswith("MATH") and s != "DMM")]
-                kept_math = [s for s in self.available_signals if s.startswith("MATH")]
-                self.available_signals = kept_hw + selected + kept_math
             else:
                 kept_math = [s for s in self.available_signals if s.startswith("MATH")]
                 self.available_signals = selected + kept_math
@@ -744,53 +737,76 @@ class DAQControlApp(QWidget):
         dev_prefix = self._get_active_hw_device()
         import functools
         
-        active_ai = [s for s in self.available_signals if self._is_ai_signal(s)]
+        active_ai = [s for s in self.available_signals if self._is_ai_signal(s) or s == "DMM"]
         if active_ai:
             ai_label = QLabel("<b>Analog Inputs (AI)</b>")
             ai_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 10px; margin-bottom: 5px;")
             self.config_grid.addWidget(ai_label, row_idx, 0, 1, 12)
             row_idx += 1
 
-        for raw_name in self.available_signals:
-            if not self._is_ai_signal(raw_name): continue
+        for raw_name in active_ai:
 
             cfg = self.master_channel_configs[raw_name]
+            is_dmm = raw_name == "DMM"
             base_name = self._signal_base_name(raw_name)
-            dev_name = self._signal_device_name(raw_name) or dev_prefix
-            ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
+            if is_dmm:
+                ch_label = QLabel("Keithley DMM (DMM)")
+            else:
+                dev_name = self._signal_device_name(raw_name) or dev_prefix
+                ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
             custom_name_input = QLineEdit(self._display_custom_name(raw_name))
+
             term_cb = QComboBox()
-            if self._ai_index(base_name) >= 16:
+            if is_dmm:
+                term_cb.addItem("N/A")
+                term_cb.setEnabled(False)
+            elif self._ai_index(base_name) >= 16:
                 term_cb.addItems(term_options_high)
                 if cfg.get("term", "RSE") == "DIFF": term_cb.setCurrentText("RSE")
                 else: term_cb.setCurrentText(cfg.get("term", "RSE"))
-            else: 
+            else:
                 term_cb.addItems(term_options)
                 term_cb.setCurrentText(cfg.get("term", "DIFF"))
-                
+
             range_cb = QComboBox()
-            range_cb.addItems(range_options)
-            range_cb.setCurrentText(cfg.get("range", "-10 to 10"))
-            
+            if is_dmm:
+                range_cb.addItem("N/A")
+                range_cb.setEnabled(False)
+            else:
+                range_cb.addItems(range_options)
+                range_cb.setCurrentText(cfg.get("range", "-10 to 10"))
+
             sensor_cb = QComboBox()
-            sensor_cb.addItems(sensor_options)
-            
+            if is_dmm:
+                sensor_cb.addItem("N/A")
+                sensor_cb.setEnabled(False)
+            else:
+                sensor_cb.addItems(sensor_options)
+
             scale_input = QLineEdit(cfg.get("scale", "1.0"))
             unit_input = QLineEdit(cfg.get("unit", "V"))
             offset_input = QLineEdit(cfg.get("offset", "0.0"))
 
             zero_btn = QPushButton("Zero")
-            zero_btn.clicked.connect(functools.partial(self.calibrate_single_offset, raw_name, scale_input, offset_input, term_cb, range_cb, sensor_cb))
-            
+            if is_dmm:
+                zero_btn.setEnabled(False)
+            else:
+                zero_btn.clicked.connect(functools.partial(self.calibrate_single_offset, raw_name, scale_input, offset_input, term_cb, range_cb, sensor_cb))
+
             lpf_cb = QCheckBox()
             lpf_cb.setChecked(cfg.get("lpf_on", False))
             lpf_cut = QLineEdit(cfg.get("lpf_cutoff", "10.0"))
             lpf_ord = QComboBox()
             lpf_ord.addItems(["2", "4", "6"])
             lpf_ord.setCurrentText(str(cfg.get("lpf_order", "4")))
+            if is_dmm:
+                lpf_cb.setEnabled(False)
+                lpf_cut.setEnabled(False)
+                lpf_ord.setEnabled(False)
 
-            sensor_cb.currentIndexChanged.connect(make_sensor_callback(sensor_cb, unit_input))
-            sensor_cb.setCurrentText(cfg.get("sensor", "None")) 
+            if not is_dmm:
+                sensor_cb.currentIndexChanged.connect(make_sensor_callback(sensor_cb, unit_input))
+                sensor_cb.setCurrentText(cfg.get("sensor", "None"))
 
             self.config_grid.addWidget(ch_label, row_idx, 0)
             self.config_grid.addWidget(custom_name_input, row_idx, 1)
@@ -881,37 +897,6 @@ class DAQControlApp(QWidget):
                     "expr_input": expr_input, "unit_input": unit_input
                 })
                 row_idx += 1
-
-        if "DMM" in self.available_signals:
-            line = QFrame()
-            line.setFrameShape(QFrame.HLine)
-            line.setFrameShadow(QFrame.Sunken)
-            self.config_grid.addWidget(line, row_idx, 0, 1, 12)
-            row_idx += 1
-
-            dmm_label = QLabel("<b>External Devices (DMM)</b>")
-            dmm_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
-            self.config_grid.addWidget(dmm_label, row_idx, 0, 1, 12)
-            row_idx += 1
-
-            dmm_ch_label = QLabel("Keithley DMM (DMM)")
-            dmm_custom = QLineEdit(self._display_custom_name("DMM"))
-            dmm_unit = QLineEdit("V")
-            dmm_unit.setEnabled(False)
-            self.config_grid.addWidget(dmm_ch_label, row_idx, 0)
-            self.config_grid.addWidget(dmm_custom, row_idx, 1)
-            self.config_grid.addWidget(dmm_unit, row_idx, 6)
-
-            self.channel_ui_configs.append({
-                "name": "DMM", "ch_label": dmm_ch_label, "custom_name_input": dmm_custom,
-                "term_cb": QComboBox(), "range_cb": QComboBox(), "sensor_cb": QComboBox(),
-                "scale_input": QLineEdit("1.0"), "unit_input": dmm_unit, "offset_input": QLineEdit("0.0")
-            })
-            row_idx += 1
-
-            self.config_grid.addWidget(QLabel("<b>Keithley DMM IP:</b>"), row_idx, 0)
-            self.config_grid.addWidget(self.Keithley_DMM_IP, row_idx, 1, 1, 3)
-            row_idx += 1
 
     def apply_config_update(self):
         self.cache_current_ui_configs()
