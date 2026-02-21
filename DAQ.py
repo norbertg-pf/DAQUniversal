@@ -54,6 +54,7 @@ from ui_components import (
 
 class DAQControlApp(QWidget):
     MATH_DEVICE_ID = "__MATH_DEVICE__"
+    DMM_DEVICE_ID = "__DMM_DEVICE__"
 
     def __init__(self):
         super().__init__()
@@ -190,6 +191,9 @@ class DAQControlApp(QWidget):
     def _is_math_device_selected(self):
         return self.device_cb.currentData() == self.MATH_DEVICE_ID
 
+    def _is_dmm_device_selected(self):
+        return self.device_cb.currentData() == self.DMM_DEVICE_ID
+
     def _signal_base_name(self, signal_name):
         return signal_name.split("@", 1)[0] if "@" in signal_name else signal_name
 
@@ -233,16 +237,27 @@ class DAQControlApp(QWidget):
     def _ensure_signal_state(self, signal_name):
         if signal_name not in self.master_channel_configs:
             self.master_channel_configs[signal_name] = self.get_default_channel_config(signal_name)
+        base_name = self._signal_base_name(signal_name)
+        cfg = self.master_channel_configs.get(signal_name, {})
+        if not cfg.get("custom_name") or cfg.get("custom_name") == signal_name:
+            cfg["custom_name"] = base_name
         if signal_name not in self.history_data:
             self.history_data[signal_name] = collections.deque(maxlen=self.history_maxlen)
 
+    def _display_custom_name(self, raw_name):
+        cfg = self.master_channel_configs.get(raw_name, {})
+        custom = str(cfg.get("custom_name", "") or "").strip()
+        if not custom or custom == raw_name:
+            return self._signal_base_name(raw_name)
+        return custom
+
     def _get_active_hw_device(self):
         dev_name = self.device_cb.currentData()
-        if dev_name and dev_name != self.MATH_DEVICE_ID:
+        if dev_name and dev_name not in (self.MATH_DEVICE_ID, self.DMM_DEVICE_ID):
             return dev_name
         for i in range(self.device_cb.count()):
             candidate = self.device_cb.itemData(i)
-            if candidate != self.MATH_DEVICE_ID:
+            if candidate not in (self.MATH_DEVICE_ID, self.DMM_DEVICE_ID):
                 return candidate
         return "Dev1"
 
@@ -448,6 +463,7 @@ class DAQControlApp(QWidget):
             if name == current_data:
                 idx_to_set = i
 
+        self.device_cb.addItem("DMM (External)", userData=self.DMM_DEVICE_ID)
         self.device_cb.addItem("Math (Virtual)", userData=self.MATH_DEVICE_ID)
 
         if self.device_cb.count() > 0:
@@ -464,6 +480,12 @@ class DAQControlApp(QWidget):
         return get_profile(profile_name)
 
     def apply_selected_device_profile(self):
+        if self._is_dmm_device_selected():
+            kept_math = [s for s in self.available_signals if s.startswith("MATH")]
+            self.available_signals = ["DMM"] + kept_math
+            for sig in self.available_signals: self._ensure_signal_state(sig)
+            return
+
         valid_hw = set()
         for dev in self.detected_devices:
             valid_hw.update(self._channels_for_device(dev))
@@ -484,7 +506,7 @@ class DAQControlApp(QWidget):
             return
         for ch in getattr(self, "channel_ui_configs", []):
             raw_name = ch['name']
-            if not raw_name.startswith("MATH"):
+            if not raw_name.startswith("MATH") and raw_name != "DMM":
                 base_name = self._signal_base_name(raw_name)
                 dev_name = self._signal_device_name(raw_name) or new_device
                 ch['ch_label'].setText(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
@@ -494,6 +516,9 @@ class DAQControlApp(QWidget):
         if self._is_math_device_selected():
             allowed_signals = [f"MATH{i}" for i in range(4)]
             active_signals = [s for s in self.available_signals if s.startswith("MATH")]
+        elif self._is_dmm_device_selected():
+            allowed_signals = ["DMM"]
+            active_signals = [s for s in self.available_signals if s == "DMM"]
         else:
             allowed_signals = []
             for dev in self.detected_devices:
@@ -507,8 +532,13 @@ class DAQControlApp(QWidget):
             if len(selected) == 0:
                 self.available_signals = []
             elif self._is_math_device_selected():
-                kept_hw = [s for s in self.available_signals if not s.startswith("MATH")]
-                self.available_signals = kept_hw + selected
+                kept_hw = [s for s in self.available_signals if (not s.startswith("MATH") and s != "DMM")]
+                kept_dmm = [s for s in self.available_signals if s == "DMM"]
+                self.available_signals = kept_hw + kept_dmm + selected
+            elif self._is_dmm_device_selected():
+                kept_hw = [s for s in self.available_signals if (not s.startswith("MATH") and s != "DMM")]
+                kept_math = [s for s in self.available_signals if s.startswith("MATH")]
+                self.available_signals = kept_hw + selected + kept_math
             else:
                 kept_math = [s for s in self.available_signals if s.startswith("MATH")]
                 self.available_signals = selected + kept_math
@@ -629,24 +659,22 @@ class DAQControlApp(QWidget):
         main_lay.addWidget(self.config_scroll)
         
         bottom_grid = QGridLayout()
-        bottom_grid.addWidget(QLabel("<b>Keithley DMM IP:</b>"), 0, 0)
         self.Keithley_DMM_IP = QLineEdit("169.254.169.37")
-        bottom_grid.addWidget(self.Keithley_DMM_IP, 0, 1, 1, 4) 
-        
-        bottom_grid.addWidget(QLabel("<b>Google Drive Target Folder Link:</b>"), 1, 0)
+
+        bottom_grid.addWidget(QLabel("<b>Google Drive Target Folder Link:</b>"), 0, 0)
         self.gdrive_link_input = QLineEdit("")
         self.gdrive_link_input.setPlaceholderText("https://drive.google.com/drive/folders/...")
-        bottom_grid.addWidget(self.gdrive_link_input, 1, 1)
+        bottom_grid.addWidget(self.gdrive_link_input, 0, 1)
         
-        bottom_grid.addWidget(QLabel("<b>Auth Method:</b>"), 1, 2)
+        bottom_grid.addWidget(QLabel("<b>Auth Method:</b>"), 0, 2)
         self.gdrive_auth_cb = QComboBox()
         self.gdrive_auth_cb.addItems(["OAuth 2.0 (User Login)", "Service Account (Robot)"])
-        bottom_grid.addWidget(self.gdrive_auth_cb, 1, 3)
+        bottom_grid.addWidget(self.gdrive_auth_cb, 0, 3)
         
         self.gdrive_help_btn = QPushButton("Help")
         self.gdrive_help_btn.setStyleSheet("font-weight: bold; background-color: #6c757d; color: white;")
         self.gdrive_help_btn.clicked.connect(self.show_gdrive_help)
-        bottom_grid.addWidget(self.gdrive_help_btn, 1, 4)
+        bottom_grid.addWidget(self.gdrive_help_btn, 0, 4)
 
         main_lay.addLayout(bottom_grid)
         
@@ -707,7 +735,7 @@ class DAQControlApp(QWidget):
             base_name = self._signal_base_name(raw_name)
             dev_name = self._signal_device_name(raw_name) or dev_prefix
             ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
-            custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
+            custom_name_input = QLineEdit(self._display_custom_name(raw_name))
             term_cb = QComboBox()
             if self._ai_index(base_name) >= 16:
                 term_cb.addItems(term_options_high)
@@ -779,7 +807,7 @@ class DAQControlApp(QWidget):
                 base_name = self._signal_base_name(raw_name)
                 dev_name = self._signal_device_name(raw_name) or dev_prefix
                 ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({base_name})")
-                custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
+                custom_name_input = QLineEdit(self._display_custom_name(raw_name))
                 unit_input = QLineEdit("V")
                 unit_input.setEnabled(False)
                 
@@ -816,7 +844,7 @@ class DAQControlApp(QWidget):
             for raw_name in active_math:
                 cfg = self.master_channel_configs[raw_name]
                 ch_label = QLabel(f"{raw_name}")
-                custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
+                custom_name_input = QLineEdit(self._display_custom_name(raw_name))
                 expr_input = QLineEdit(cfg.get("expression", "AI0 - AI1"))
                 unit_input = QLineEdit(cfg.get("unit", "Value"))
                 
@@ -830,6 +858,37 @@ class DAQControlApp(QWidget):
                     "expr_input": expr_input, "unit_input": unit_input
                 })
                 row_idx += 1
+
+        if "DMM" in self.available_signals:
+            line = QFrame()
+            line.setFrameShape(QFrame.HLine)
+            line.setFrameShadow(QFrame.Sunken)
+            self.config_grid.addWidget(line, row_idx, 0, 1, 12)
+            row_idx += 1
+
+            dmm_label = QLabel("<b>External Devices (DMM)</b>")
+            dmm_label.setStyleSheet("color: #0055a4; font-size: 14px; margin-top: 5px; margin-bottom: 5px;")
+            self.config_grid.addWidget(dmm_label, row_idx, 0, 1, 12)
+            row_idx += 1
+
+            dmm_ch_label = QLabel("Keithley DMM (DMM)")
+            dmm_custom = QLineEdit(self._display_custom_name("DMM"))
+            dmm_unit = QLineEdit("V")
+            dmm_unit.setEnabled(False)
+            self.config_grid.addWidget(dmm_ch_label, row_idx, 0)
+            self.config_grid.addWidget(dmm_custom, row_idx, 1)
+            self.config_grid.addWidget(dmm_unit, row_idx, 6)
+
+            self.channel_ui_configs.append({
+                "name": "DMM", "ch_label": dmm_ch_label, "custom_name_input": dmm_custom,
+                "term_cb": QComboBox(), "range_cb": QComboBox(), "sensor_cb": QComboBox(),
+                "scale_input": QLineEdit("1.0"), "unit_input": dmm_unit, "offset_input": QLineEdit("0.0")
+            })
+            row_idx += 1
+
+            self.config_grid.addWidget(QLabel("<b>Keithley DMM IP:</b>"), row_idx, 0)
+            self.config_grid.addWidget(self.Keithley_DMM_IP, row_idx, 1, 1, 3)
+            row_idx += 1
 
     def apply_config_update(self):
         self.cache_current_ui_configs()
