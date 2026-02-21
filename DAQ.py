@@ -508,15 +508,18 @@ class DAQControlApp(QWidget):
         if self._is_math_device_selected():
             allowed_signals = [f"MATH{i}" for i in range(4)]
             active_signals = [s for s in self.available_signals if s.startswith("MATH")]
-        elif selected_device == self.DMM_DEVICE_ID:
-            allowed_signals = [self.DMM_SIGNAL_NAME]
-            active_signals = [s for s in self.available_signals if s == self.DMM_SIGNAL_NAME]
         else:
             allowed_signals = []
-            for dev in self.detected_devices:
-                if dev == self.DMM_DEVICE_ID:
-                    continue
-                allowed_signals.extend(self._channels_for_device(dev))
+            if selected_device == self.DMM_DEVICE_ID:
+                # Keep DMM-only device focused, but allow pairing with simulated channels.
+                if "Simulated device" in self.detected_devices:
+                    allowed_signals.extend(self._channels_for_device("Simulated device"))
+            else:
+                if selected_device:
+                    allowed_signals.extend(self._channels_for_device(selected_device))
+
+            # DMM can be enabled together with DAQ/simulated channels.
+            allowed_signals.append(self.DMM_SIGNAL_NAME)
             active_signals = [s for s in self.available_signals if s in allowed_signals]
 
         dialog = ChannelSelectionDialog(active_signals, self, allowed_signals=allowed_signals)
