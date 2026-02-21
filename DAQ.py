@@ -13,8 +13,8 @@ from nidaqmx.constants import AcquisitionType, TerminalConfiguration, LineGroupi
 from PyQt5.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QLabel, QLineEdit, QGridLayout,
                              QCheckBox, QFileDialog, QScrollArea,
-                             QTabWidget, QComboBox, QDialog, QMessageBox, QGroupBox, QDoubleSpinBox, QFormLayout, QFrame)
-from PyQt5.QtCore import QTimer, Qt, pyqtSignal, QObject, QThread
+                             QTabWidget, QComboBox, QMessageBox, QGroupBox, QFrame)
+from PyQt5.QtCore import QTimer, Qt
 
 # --- REPLACED MATPLOTLIB WITH PYQTGRAPH ---
 import pyqtgraph as pg
@@ -28,39 +28,13 @@ import collections
 import time
 from pathlib import Path
 import traceback
-import re
 
-from hardware_profiles import (
-    all_ai_channels,
-    all_ao_channels,
-    detect_profile_name,
-    get_profile,
-    DEFAULT_PROFILE_NAME,
-)
+from hardware_profiles import DEFAULT_PROFILE_NAME, detect_profile_name, get_profile
 
-# =============================================================================
-# GOOGLE DRIVE API IMPORTS (BOTH METHODS)
-# =============================================================================
-try:
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaFileUpload
-    from google.auth.transport.requests import Request
-    from google.oauth2.credentials import Credentials as OAuthCredentials
-    from google.oauth2.service_account import Credentials as ServiceAccountCredentials
-    from google_auth_oauthlib.flow import InstalledAppFlow
-    GOOGLE_API_AVAILABLE = True
-except ImportError:
-    GOOGLE_API_AVAILABLE = False
+from app_constants import ALL_AO_CHANNELS, ALL_CHANNELS, PLOT_COLORS
 
 # Global Constants
 DEFAULT_HARDWARE_PROFILE = get_profile(DEFAULT_PROFILE_NAME)
-
-ALL_AI_CHANNELS = all_ai_channels()
-ALL_AO_CHANNELS = all_ao_channels()
-ALL_MATH_CHANNELS = [f"MATH{i}" for i in range(4)]
-ALL_CHANNELS = ALL_AI_CHANNELS + ALL_AO_CHANNELS + ALL_MATH_CHANNELS + ["DMM"]
-
-PLOT_COLORS = [(31, 119, 180), (255, 127, 14), (44, 160, 44), (214, 39, 40), (148, 103, 189), (140, 86, 75)]
 
 from processing_workers import get_terminal_name_with_dev_prefix, daq_read_worker, math_processing_worker
 

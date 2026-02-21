@@ -1,6 +1,7 @@
 import os
 import traceback
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pyqtgraph as pg
@@ -24,19 +25,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from hardware_profiles import all_ai_channels, all_ao_channels
+from app_constants import ALL_AI_CHANNELS, ALL_AO_CHANNELS, ALL_CHANNELS, ALL_MATH_CHANNELS
 
 try:
     import googleapiclient.discovery  # noqa: F401
     GOOGLE_API_AVAILABLE = True
 except ImportError:
     GOOGLE_API_AVAILABLE = False
-
-
-ALL_AI_CHANNELS = all_ai_channels()
-ALL_AO_CHANNELS = all_ao_channels()
-ALL_MATH_CHANNELS = [f"MATH{i}" for i in range(4)]
-ALL_CHANNELS = ALL_AI_CHANNELS + ALL_AO_CHANNELS + ALL_MATH_CHANNELS + ["DMM"]
 
 
 class GDriveHelpDialog(QDialog):
