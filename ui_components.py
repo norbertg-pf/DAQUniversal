@@ -144,12 +144,14 @@ class ChannelSelectionDialog(QDialog):
 
         def pretty(sig):
             base, dev = split_sig(sig)
+            if base == "DMM":
+                return "DMM (Keithley 6510)"
             if dev:
                 dev_disp = parent._device_display_name(dev) if parent and hasattr(parent, "_device_display_name") else dev
                 return f"{dev_disp}/{base.lower()} ({base})"
             return sig
 
-        ai_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AI")]
+        ai_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AI") or split_sig(sig)[0] == "DMM"]
         ao_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AO")]
         math_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("MATH")]
 
@@ -200,16 +202,6 @@ class ChannelSelectionDialog(QDialog):
                     r += 1
             math_group.setLayout(math_layout)
             layout.addWidget(math_group)
-
-        if "DMM" in allowed:
-            dmm_group = QGroupBox("External Devices")
-            dmm_layout = QVBoxLayout()
-            cb = QCheckBox("DMM")
-            cb.setChecked("DMM" in active_signals)
-            self.checkboxes["DMM"] = cb
-            dmm_layout.addWidget(cb)
-            dmm_group.setLayout(dmm_layout)
-            layout.addWidget(dmm_group)
 
         btns = QHBoxLayout()
         ok_btn = QPushButton("Apply Configuration")
