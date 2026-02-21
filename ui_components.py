@@ -128,57 +128,70 @@ class ChannelSelectionDialog(QDialog):
         self.setMinimumWidth(800)
         layout = QVBoxLayout(self)
         self.checkboxes = {}
-        allowed = set(allowed_signals) if allowed_signals is not None else set(ALL_CHANNELS)
+        allowed = list(allowed_signals) if allowed_signals is not None else list(ALL_CHANNELS)
 
-        def pretty(sig):
+        def split_sig(sig):
             if "@" in sig:
                 base, dev = sig.split("@", 1)
-                return f"{dev}/{base.lower()} ({base})"
+                return base, dev
+            return sig, None
+
+        def pretty(sig):
+            base, dev = split_sig(sig)
+            if dev:
+                dev_disp = parent._device_display_name(dev) if parent and hasattr(parent, "_device_display_name") else dev
+                return f"{dev_disp}/{base.lower()} ({base})"
             return sig
 
-        if any(sig in allowed for sig in ALL_AI_CHANNELS):
+        ai_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AI")]
+        ao_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("AO")]
+        math_signals = [sig for sig in allowed if split_sig(sig)[0].startswith("MATH")]
+
+        if ai_signals:
             ai_group = QGroupBox("Analog Inputs (AI)")
             ai_layout = QGridLayout()
             r, c = 0, 0
-            for sig in ALL_AI_CHANNELS:
-                if sig not in allowed:
-                    continue
+            for sig in ai_signals:
                 cb = QCheckBox(pretty(sig))
                 cb.setChecked(sig in active_signals)
                 self.checkboxes[sig] = cb
                 ai_layout.addWidget(cb, r, c)
                 c += 1
-                if c > 7:  c = 0; r += 1
+                if c > 3:
+                    c = 0
+                    r += 1
             ai_group.setLayout(ai_layout)
             layout.addWidget(ai_group)
 
-        if any(sig in allowed for sig in ALL_AO_CHANNELS):
+        if ao_signals:
             ao_group = QGroupBox("Analog Outputs (AO)")
             ao_layout = QGridLayout()
             r, c = 0, 0
-            for sig in ALL_AO_CHANNELS:
-                if sig not in allowed:
-                    continue
+            for sig in ao_signals:
                 cb = QCheckBox(pretty(sig))
                 cb.setChecked(sig in active_signals)
                 self.checkboxes[sig] = cb
                 ao_layout.addWidget(cb, r, c)
                 c += 1
+                if c > 3:
+                    c = 0
+                    r += 1
             ao_group.setLayout(ao_layout)
             layout.addWidget(ao_group)
 
-        if any(sig in allowed for sig in ALL_MATH_CHANNELS):
+        if math_signals:
             math_group = QGroupBox("Virtual Math Channels")
             math_layout = QGridLayout()
             r, c = 0, 0
-            for sig in ALL_MATH_CHANNELS:
-                if sig not in allowed:
-                    continue
+            for sig in math_signals:
                 cb = QCheckBox(pretty(sig))
                 cb.setChecked(sig in active_signals)
                 self.checkboxes[sig] = cb
                 math_layout.addWidget(cb, r, c)
                 c += 1
+                if c > 3:
+                    c = 0
+                    r += 1
             math_group.setLayout(math_layout)
             layout.addWidget(math_group)
 
@@ -191,7 +204,7 @@ class ChannelSelectionDialog(QDialog):
             dmm_layout.addWidget(cb)
             dmm_group.setLayout(dmm_layout)
             layout.addWidget(dmm_group)
-        
+
         btns = QHBoxLayout()
         ok_btn = QPushButton("Apply Configuration")
         ok_btn.setStyleSheet("font-weight: bold; background-color: #0078D7; color: white; padding: 5px;")

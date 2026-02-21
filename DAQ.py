@@ -218,6 +218,10 @@ class DAQControlApp(QWidget):
         profile = get_profile(detect_profile_name(ptype, device_name))
         return [self._mk_dev_signal(device_name, sig) for sig in (profile.ai_channels + profile.ao_channels)]
 
+    def _device_display_name(self, device_name):
+        ptype = self.device_product_types.get(device_name, "")
+        return f"{device_name}\\{ptype}" if ptype else device_name
+
     def _ensure_signal_state(self, signal_name):
         if signal_name not in self.master_channel_configs:
             self.master_channel_configs[signal_name] = self.get_default_channel_config(signal_name)
@@ -492,7 +496,9 @@ class DAQControlApp(QWidget):
         for ch in getattr(self, "channel_ui_configs", []):
             raw_name = ch['name']
             if not raw_name.startswith("MATH"):
-                ch['ch_label'].setText(f"{new_device}/{raw_name.lower()} ({raw_name})")
+                base_name = self._signal_base_name(raw_name)
+                dev_name = self._signal_device_name(raw_name) or new_device
+                ch['ch_label'].setText(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({raw_name})")
         self.rebuild_config_tab()
     def open_channel_selector(self):
         self.cache_current_ui_configs()
@@ -715,7 +721,7 @@ class DAQControlApp(QWidget):
             cfg = self.master_channel_configs[raw_name]
             base_name = self._signal_base_name(raw_name)
             dev_name = self._signal_device_name(raw_name) or dev_prefix
-            ch_label = QLabel(f"{dev_name}/{base_name.lower()} ({raw_name})")
+            ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({raw_name})")
             custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
             term_cb = QComboBox()
             if self._ai_index(base_name) >= 16:
@@ -788,7 +794,7 @@ class DAQControlApp(QWidget):
                 cfg = self.master_channel_configs[raw_name]
                 base_name = self._signal_base_name(raw_name)
                 dev_name = self._signal_device_name(raw_name) or dev_prefix
-                ch_label = QLabel(f"{dev_name}/{base_name.lower()} ({raw_name})")
+                ch_label = QLabel(f"{self._device_display_name(dev_name)}/{base_name.lower()} ({raw_name})")
                 custom_name_input = QLineEdit(cfg.get("custom_name", raw_name))
                 unit_input = QLineEdit("V")
                 unit_input.setEnabled(False)
